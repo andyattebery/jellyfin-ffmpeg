@@ -1,0 +1,304 @@
+name: '🔄 Build and release'
+
+# This repo is a BUILD RECIPE, not a fork of the ffmpeg source — the same shape as
+# BtbN/FFmpeg-Builds, which jellyfin-ffmpeg's own builder/ directory is derived from.
+#
+# Nothing here is committed or pushed. Each build checks out jellyfin/jellyfin-ffmpeg at an
+# upstream tag, applies patches/ with `git apply`, builds, and publishes a release. That is why
+# GITHUB_TOKEN suffices: no ref carrying .github/workflows/* is ever pushed, which is what
+# App tokens are refused on.
+#
+# The patch series does the work several guards used to do by hand: a patch that no longer
+# applies fails by construction, which IS the "upstream adopted our pin, retire the fork" check
+# and the "upstream moved the pin somewhere unexpected" check.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'   # daily, offset off the hour
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to build (blank = newest on the tracked line)'
+        type: string
+        default: ''
+      force:
+        description: 'Rebuild even if this tag is already released here'
+        type: boolean
+        default: false
+      mode:
+        description: 'full = build for real | dry_run = release path only (~3m) | smoke = whole pipeline minus the compile (~6m)'
+        type: choice
+        options: [full, dry_run, smoke]
+        default: full
+
+concurrency:
+  group: build-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM: jellyfin/jellyfin-ffmpeg
+  LINE: v8.
+  PIN_NAME: n13.0.19.1
+  # Advisory: warns if upstream edits the build-wrapper steps copied into the build jobs below.
+  # Regenerate by clearing this and reading the value resolve-upstream.sh prints.
+  DRIFT_HASH: b81e6dbb8e9d36f8
+
+jobs:
+  resolve:
+    name: 'Resolve upstream'
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.r.outputs.proceed }}
+      upstream_tag: ${{ steps.r.outputs.upstream_tag }}
+      release_tag: ${{ steps.r.outputs.release_tag }}
+      pkg_ver: ${{ steps.r.outputs.pkg_ver }}
+      mode: ${{ steps.m.outputs.mode }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Runs before anything is resolved or published. ~1s. This is what keeps the rename and
+      # version-comparison logic from silently rotting.
+      - name: Self-test
+        run: ./.github/scripts/resolve-upstream.sh --self-test
+
+      # Normalise once, so every downstream `if:` compares the same way whether the trigger was
+      # schedule (inputs absent) or workflow_dispatch.
+      - name: Resolve run mode
+        id: m
+        run: echo "mode=${{ inputs.mode || 'full' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve
+        id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT_TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force == true && 'true' || 'false' }}
+          MODE: ${{ steps.m.outputs.mode }}
+        run: ./.github/scripts/resolve-upstream.sh
+
+  # ---------------------------------------------------------------------------------------
+  # Build jobs. The 4 wrapper steps mirror upstream's _meta_portable.yaml (L34-60) and
+  # _meta_win_clang_portable.yaml (L41-69). The build LOGIC is not copied — ./build-linux-amd64
+  # and ./msys2/build.sh come from the checked-out upstream tree, so upstream's changes to the
+  # build itself arrive for free. Only amd64 linux and win64 are built: those are what the fleet
+  # installs, and 2 jobs keep a red run meaningful instead of routine.
+  # ---------------------------------------------------------------------------------------
+
+  build_linux:
+    name: 'Build portable linux amd64'
+    needs: resolve
+    if: needs.resolve.outputs.proceed == 'true' && needs.resolve.outputs.mode != 'dry_run'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1   # no floating v1 tag exists for this action
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout upstream at the tag
+        uses: actions/checkout@v7
+        with:
+          repository: jellyfin/jellyfin-ffmpeg   # keep in sync with env.UPSTREAM
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+
+      - name: Checkout this recipe
+        uses: actions/checkout@v7
+        with:
+          path: .fork
+          fetch-depth: 1
+
+      - name: Apply patch series
+        run: git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+
+      - name: Stub artifact (smoke only)
+        if: needs.resolve.outputs.mode == 'smoke'
+        env:
+          VER: ${{ needs.resolve.outputs.pkg_ver }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          : > "dist/jellyfin-ffmpeg_${VER}_portable_linux64-gpl.tar.xz"
+
+      - name: Build portable
+        if: needs.resolve.outputs.mode != 'smoke'
+        run: ./build-linux-amd64 ./dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-amd64-portable
+          path: dist
+
+  build_windows:
+    name: 'Build portable win64 (clang)'
+    needs: resolve
+    if: needs.resolve.outputs.proceed == 'true' && needs.resolve.outputs.mode != 'dry_run'
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: CLANG64
+          install: >-
+            git
+            curl
+            wget
+            zip
+            mingw-w64-clang-x86_64-toolchain
+            quilt
+            diffstat
+            mingw-w64-clang-x86_64-nasm
+
+      - name: Checkout upstream at the tag
+        uses: actions/checkout@v7
+        with:
+          repository: jellyfin/jellyfin-ffmpeg   # keep in sync with env.UPSTREAM
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+
+      - name: Checkout this recipe
+        uses: actions/checkout@v7
+        with:
+          path: .fork
+          fetch-depth: 1
+
+      - name: Apply patch series
+        run: git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+
+      - name: Prepare prefix dir
+        run: mkdir /clang64/ffbuild
+
+      - name: Stub artifact (smoke only)
+        if: needs.resolve.outputs.mode == 'smoke'
+        env:
+          VER: ${{ needs.resolve.outputs.pkg_ver }}
+        run: |
+          set -euo pipefail
+          mkdir -p ./msys2/artifacts
+          : > "./msys2/artifacts/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
+
+      - name: Build portable
+        if: needs.resolve.outputs.mode != 'smoke'
+        run: ./msys2/build.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: win-clang-win64-portable
+          path: ./msys2/artifacts
+
+  # ---------------------------------------------------------------------------------------
+
+  release:
+    name: 'Publish release'
+    needs: [resolve, build_linux, build_windows]
+    # always() so dry_run's skipped build jobs do not skip this one too. The two explicit
+    # success checks keep `needs:` as the real gate otherwise: a failed build means no release,
+    # with no artifact-presence probing needed.
+    if: >-
+      always()
+      && needs.resolve.outputs.proceed == 'true'
+      && ( needs.resolve.outputs.mode == 'dry_run'
+           || ( needs.build_linux.result == 'success'
+                && needs.build_windows.result == 'success' ) )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built artifacts
+        if: needs.resolve.outputs.mode != 'dry_run'
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      # dry_run skips the build jobs entirely, so there is nothing to download — stub the two
+      # filenames the builds would have produced. Names come from debian/changelog via
+      # builder/build.sh:88, which is why pkg_ver is read from there rather than from the tag.
+      - name: Stub artifacts (dry_run only)
+        if: needs.resolve.outputs.mode == 'dry_run'
+        env:
+          VER: ${{ needs.resolve.outputs.pkg_ver }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          : > "dist/jellyfin-ffmpeg_${VER}_portable_linux64-gpl.tar.xz"
+          : > "dist/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
+
+      # Upstream names assets from debian/changelog only, so a fork build is byte-identically
+      # named to upstream's — and eta is updated by hand-pulled download. Suffixing the version
+      # keeps _portable_<platform>-gpl.<ext> contiguous, so upstream's own glob shape
+      # (build-linux-amd64:24) still matches. Asserted in --self-test.
+      - name: Mark assets as fork builds
+        env:
+          VER: ${{ needs.resolve.outputs.pkg_ver }}
+        run: |
+          set -euo pipefail
+          echo "--- as built ---"; ls -l dist
+          for f in dist/*; do
+            case "$f" in
+              *-nvenc-*) echo "::error::already renamed, refusing to double-apply: $f"; exit 1 ;;
+            esac
+            new="${f/_${VER}_/_${VER}-nvenc-${PIN_NAME}_}"
+            # A no-op means upstream changed how it names assets. Assert it explicitly:
+            # `mv a a` exits 0, so set -e would let unrenamed assets ship, green and wrong.
+            [ "$new" != "$f" ] || {
+              echo "::error::rename produced no change for $f (expected _${VER}_ in the name)"
+              exit 1
+            }
+            mv "$f" "$new"
+          done
+          n=$(find dist -type f | wc -l)
+          [ "$n" -eq 2 ] || { echo "::error::expected 2 assets, found $n"; exit 1; }
+          unmarked=$(find dist -type f ! -name '*-nvenc-*' | wc -l)
+          [ "$unmarked" -eq 0 ] || { echo "::error::$unmarked asset(s) missing the fork marker"; exit 1; }
+          echo "--- to upload ---"; ls -l dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # No checkout in this job, so gh has no git remote to infer the repo from.
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.resolve.outputs.release_tag }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+          MODE: ${{ needs.resolve.outputs.mode }}
+        run: |
+          set -euo pipefail
+          {
+            if [ "$MODE" != "full" ]; then
+              echo "**${MODE} run — these assets are empty stubs. Delete this release and its tag.**"
+              echo
+            fi
+            echo "Upstream \`${UPSTREAM_TAG}\` built with nv-codec-headers bumped to \`${PIN_NAME}\`,"
+            echo "unlocking \`-tune uhq\`, \`-tf_level\`, \`-lookahead_level\` and \`-split_encode_mode\`."
+            echo
+            echo "Driver floor is **570.0** — check your driver before installing."
+            echo
+            echo "Built by checking out \`${UPSTREAM}\` at \`${UPSTREAM_TAG}\` and applying"
+            echo "\`patches/jellyfin-ffmpeg/\`. Reproduce with:"
+            echo '```'
+            echo "git clone -b ${UPSTREAM_TAG} https://github.com/${UPSTREAM}.git && cd jellyfin-ffmpeg"
+            echo "git apply /path/to/patches/jellyfin-ffmpeg/*.patch && ./build-linux-amd64 ./dist"
+            echo '```'
+            echo
+            echo "Assets carry \`-nvenc-${PIN_NAME}\` in the filename to distinguish them from"
+            echo "upstream's identically-versioned builds."
+          } > notes.md
+
+          # Delete-then-create (BtbN's idiom) keeps this to one code path: the first release and
+          # a re-run after a failure behave identically, with no "tag already exists" branch.
+          gh release delete --cleanup-tag --yes "$TAG" || true
+          gh release create "$TAG" \
+            --target "${{ github.sha }}" \
+            --title "${UPSTREAM_TAG} (nv-codec-headers ${PIN_NAME})" \
+            --notes-file notes.md \
+            dist/*
+          echo "Published $TAG with $(find dist -type f | wc -l) assets"

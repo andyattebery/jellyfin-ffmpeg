@@ -1,0 +1,5 @@
+# Patches must reach the Windows runner byte-for-byte: git apply fails on CRLF-converted
+# context lines. Upstream hit the same class of bug (see their "ci: disable autocrlf" and
+# "ci: use .gitattributes instead" commits on _meta_win_clang_portable.yaml).
+*.patch -text
+*.sh    text eol=lf
