@@ -1,16 +1,10 @@
 name: '🔄 Build and release'
 
-# This repo is a BUILD RECIPE, not a fork of the ffmpeg source — the same shape as
-# BtbN/FFmpeg-Builds, which jellyfin-ffmpeg's own builder/ directory is derived from.
+# Checks out jellyfin/jellyfin-ffmpeg at an upstream tag, applies patches/, builds, releases.
+# See README.md for what this repo is and why.
 #
-# Nothing here is committed or pushed. Each build checks out jellyfin/jellyfin-ffmpeg at an
-# upstream tag, applies patches/ with `git apply`, builds, and publishes a release. That is why
-# GITHUB_TOKEN suffices: no ref carrying .github/workflows/* is ever pushed, which is what
-# App tokens are refused on.
-#
-# The patch series does the work several guards used to do by hand: a patch that no longer
-# applies fails by construction, which IS the "upstream adopted our pin, retire the fork" check
-# and the "upstream moved the pin somewhere unexpected" check.
+# Nothing is committed or pushed, which is why GITHUB_TOKEN suffices — App tokens are refused
+# on any ref whose tree touches .github/workflows/*.
 
 on:
   schedule:
@@ -190,15 +184,21 @@ jobs:
           mkdir -p ./msys2/artifacts
           # Must not be zero bytes — see the linux stub step.
           echo "smoke-run stub, not a real build" > "./msys2/artifacts/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
+          # Mimic the real build: msys2/build.sh:127 also writes this pointer file here. The
+          # stub must reproduce it, or smoke cannot catch the upload picking up extra files.
+          echo "jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip" > "./msys2/artifacts/win64-clang-gpl.txt"
 
       - name: Build portable
         if: needs.resolve.outputs.mode != 'smoke'
         run: ./msys2/build.sh
 
+      # Only the zip. msys2/build.sh:127 also drops a <target>-<variant>.txt pointer file into
+      # this directory for upstream's own publish flow; uploading it would put a third file in
+      # dist/ and trip the rename assertion.
       - uses: actions/upload-artifact@v7
         with:
           name: win-clang-win64-portable
-          path: ./msys2/artifacts
+          path: ./msys2/artifacts/*.zip
 
   # ---------------------------------------------------------------------------------------
 
@@ -233,14 +233,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          # Must not be zero bytes: the release asset upload API rejects empty files with
-          # "HTTP 400: Bad Content-Length". Learned the hard way in run 31901526516.
+          # Must not be zero bytes: the asset upload API rejects empty files with
+          # "HTTP 400: Bad Content-Length".
           echo "dry-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_linux64-gpl.tar.xz"
           echo "dry-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
 
       # Upstream names assets from debian/changelog only, so a fork build is byte-identically
-      # named to upstream's — and eta is updated by hand-pulled download. Suffixing the version
-      # keeps _portable_<platform>-gpl.<ext> contiguous, so upstream's own glob shape
+      # named to a stock one — which matters when the file is downloaded by hand. Suffixing the
+      # version keeps _portable_<platform>-gpl.<ext> contiguous, so upstream's own glob shape
       # (build-linux-amd64:24) still matches. Asserted in --self-test.
       - name: Mark assets as fork builds
         env:
@@ -298,12 +298,29 @@ jobs:
             echo "upstream's identically-versioned builds."
           } > notes.md
 
-          # Delete-then-create (BtbN's idiom) keeps this to one code path: the first release and
-          # a re-run after a failure behave identically, with no "tag already exists" branch.
+          # `gh release create` defaults --latest to "automatic based on date and version", so a
+          # smoke/dry_run release created after a real one could become Latest — and anything
+          # resolving /releases/latest would then fetch a stub. Be explicit in both directions.
+          if [ "$MODE" = "full" ]; then
+            LATEST=(--latest)
+          else
+            LATEST=(--prerelease --latest=false)
+          fi
+
+          # Delete-then-create keeps this to one code path: a first release and a re-run after
+          # a failure behave identically, with no "tag already exists" branch. Safe because
+          # release immutability is not enabled on this repo; if it is ever turned on, published
+          # releases and their tags become undeletable and this needs revisiting.
           gh release delete --cleanup-tag --yes "$TAG" || true
+          # Creates the tag at --target if it does not exist. Internally this creates a draft,
+          # uploads the assets, then publishes — so a failed upload leaves nothing behind.
           gh release create "$TAG" \
+            "${LATEST[@]}" \
             --target "${{ github.sha }}" \
             --title "${UPSTREAM_TAG} (nv-codec-headers ${PIN_NAME})" \
             --notes-file notes.md \
             dist/*
           echo "Published $TAG with $(find dist -type f | wc -l) assets"
+          if [ "$MODE" != "full" ]; then
+            echo "::warning::$MODE release — delete it and its tag when you are done inspecting it"
+          fi

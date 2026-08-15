@@ -1,5 +1,5 @@
 diff --git a/builder/scripts.d/50-ffnvcodec.sh b/builder/scripts.d/50-ffnvcodec.sh
-index 6c530e98..5f00e953 100755
+index 6c530e9..1d01200 100755
 --- a/builder/scripts.d/50-ffnvcodec.sh
 +++ b/builder/scripts.d/50-ffnvcodec.sh
 @@ -1,7 +1,13 @@
@@ -7,12 +7,12 @@ index 6c530e98..5f00e953 100755
  
  SCRIPT_REPO="https://github.com/FFmpeg/nv-codec-headers.git"
 -SCRIPT_COMMIT="451da99614412a7f9526ef301a5ee0c7a6f9ad76"
-+# Fork change: bumped from n12.0.16.1 (451da996, 2023-09-14, driver floor 520.56.06)
-+# to n13.0.19.1. Unlocks NVENC_HAVE_UHQ_TUNING (-tune uhq), TEMPORAL_FILTER (-tf_level),
-+# LOOKAHEAD_LEVEL (-lookahead_level), SPLIT_FRAME_ENCODING (-split_encode_mode).
-+# Driver floor rises to 570.0; media-01 runs 595.71.05 and eta runs 610, so both clear it.
-+# n13.1.15.0 (HEAD) floors at 610.0 and would exclude media-01 — this is the newest usable tag.
-+# Retire this fork if upstream ever bumps its own pin.
++# Bumped for -tune uhq, -tf_level, -lookahead_level and -split_encode_mode.
++#
++#   version      commit    date        min driver: linux / windows
++#   n12.0.16.1   451da996  2023-09-28  520.56.06 / 522.25   upstream's pin
++#   n13.0.19.1   88fee5c3  2026-07-14  570.0     / 570.0    <- this one
++#   n13.1.15.0   0a6fba9a  2026-07-14  610.0     / 610.0    newest tag, floor too high
 +SCRIPT_COMMIT="88fee5c37318c991a8762d423530f91681e32e3a"
  
  ffbuild_enabled() {
