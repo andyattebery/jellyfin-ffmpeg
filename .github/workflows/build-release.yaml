@@ -127,7 +127,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          : > "dist/jellyfin-ffmpeg_${VER}_portable_linux64-gpl.tar.xz"
+          # Must not be zero bytes: the release asset upload API rejects empty files with
+          # "HTTP 400: Bad Content-Length".
+          echo "smoke-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_linux64-gpl.tar.xz"
 
       - name: Build portable
         if: needs.resolve.outputs.mode != 'smoke'
@@ -186,7 +188,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ./msys2/artifacts
-          : > "./msys2/artifacts/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
+          # Must not be zero bytes — see the linux stub step.
+          echo "smoke-run stub, not a real build" > "./msys2/artifacts/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
 
       - name: Build portable
         if: needs.resolve.outputs.mode != 'smoke'
@@ -230,8 +233,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          : > "dist/jellyfin-ffmpeg_${VER}_portable_linux64-gpl.tar.xz"
-          : > "dist/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
+          # Must not be zero bytes: the release asset upload API rejects empty files with
+          # "HTTP 400: Bad Content-Length". Learned the hard way in run 31901526516.
+          echo "dry-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_linux64-gpl.tar.xz"
+          echo "dry-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
 
       # Upstream names assets from debian/changelog only, so a fork build is byte-identically
       # named to upstream's — and eta is updated by hand-pulled download. Suffixing the version
