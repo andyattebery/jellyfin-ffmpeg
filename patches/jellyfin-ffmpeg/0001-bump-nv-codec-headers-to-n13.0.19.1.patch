@@ -1,13 +1,22 @@
 diff --git a/builder/scripts.d/50-ffnvcodec.sh b/builder/scripts.d/50-ffnvcodec.sh
-index 6c530e9..1d01200 100755
+index 6c530e9..9ea6b15 100755
 --- a/builder/scripts.d/50-ffnvcodec.sh
 +++ b/builder/scripts.d/50-ffnvcodec.sh
-@@ -1,7 +1,13 @@
+@@ -1,7 +1,22 @@
  #!/bin/bash
  
  SCRIPT_REPO="https://github.com/FFmpeg/nv-codec-headers.git"
 -SCRIPT_COMMIT="451da99614412a7f9526ef301a5ee0c7a6f9ad76"
 +# Bumped for -tune uhq, -tf_level, -lookahead_level and -split_encode_mode.
++#
++# This is the LINUX pin, and it covers BOTH linux targets: builder/build.sh:27 sources
++# scripts.d/ whatever $TARGET is, so linux64 and linuxarm64 share this one line.
++#
++# There is a SECOND, unrelated pin for windows in
++# msys2/PKGBUILD/50-mingw-w64-ffnvcodec-headers/PKGBUILD (patch 0002), and a third for the .deb
++# packages inline in docker-build.sh, which this repo does not build. Moving one and not the
++# other fails silently: you get a binary with NVENC but none of the options above. That is not
++# hypothetical, it already shipped once.
 +#
 +#   version      commit    date        min driver: linux / windows
 +#   n12.0.16.1   451da996  2023-09-28  520.56.06 / 522.25   upstream's pin

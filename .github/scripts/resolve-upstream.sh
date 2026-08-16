@@ -138,13 +138,21 @@ self_test() {
   ok_true  "7.1.4-3 older than 8.1.1-1"       is_older '7.1.4-3' '8.1.1-1'
   ok_true  "raw suffixed tag misorders (why we strip)" is_older '8.1.2-2' '8.1.2-2+nvenc-n13.0.19.1'
 
-  # -- asset renaming, against the real upstream filenames
+  # -- asset renaming, against the real upstream filenames. All four built targets:
+  #    linux64 and linuxarm64 from builder/build.sh:88, win64 and winarm64 from
+  #    msys2/build.sh and msys2/buildarm64.sh.
   local L='dist/jellyfin-ffmpeg_8.1.2-2_portable_linux64-gpl.tar.xz'
+  local LA='dist/jellyfin-ffmpeg_8.1.2-2_portable_linuxarm64-gpl.tar.xz'
   local W='dist/jellyfin-ffmpeg_8.1.2-2_portable_win64-clang-gpl.zip'
+  local WA='dist/jellyfin-ffmpeg_8.1.2-2_portable_winarm64-clang-gpl.zip'
   ok "rename linux asset"   "$(asset_rename "$L" '8.1.2-2')" \
      'dist/jellyfin-ffmpeg_8.1.2-2-nvenc-n13.0.19.1_portable_linux64-gpl.tar.xz'
+  ok "rename linuxarm64 asset" "$(asset_rename "$LA" '8.1.2-2')" \
+     'dist/jellyfin-ffmpeg_8.1.2-2-nvenc-n13.0.19.1_portable_linuxarm64-gpl.tar.xz'
   ok "rename windows asset" "$(asset_rename "$W" '8.1.2-2')" \
      'dist/jellyfin-ffmpeg_8.1.2-2-nvenc-n13.0.19.1_portable_win64-clang-gpl.zip'
+  ok "rename winarm64 asset" "$(asset_rename "$WA" '8.1.2-2')" \
+     'dist/jellyfin-ffmpeg_8.1.2-2-nvenc-n13.0.19.1_portable_winarm64-clang-gpl.zip'
 
   # The renamed name must still match upstream's own glob shape — build-linux-amd64:24 uses
   # jellyfin-ffmpeg*portable_linux64-gpl*.tar.xz. This is the assertion that chose the scheme
@@ -158,6 +166,48 @@ self_test() {
   case "$rejected" in
     jellyfin-ffmpeg*portable_linux64-gpl*.tar.xz) ok "rejected scheme breaks the glob" matched 'no match' ;;
     *) ok "rejected scheme breaks the glob" 'no match' 'no match' ;;
+  esac
+
+  # Same glob assertion for the arm64 target — build-linux-arm64:24 uses
+  # jellyfin-ffmpeg*portable_linuxarm64-gpl*.tar.xz.
+  local renamed_arm; renamed_arm=$(basename "$(asset_rename "$LA" '8.1.2-2')")
+  case "$renamed_arm" in
+    jellyfin-ffmpeg*portable_linuxarm64-gpl*.tar.xz) ok "renamed arm64 keeps upstream glob shape" y y ;;
+    *) ok "renamed arm64 keeps upstream glob shape" "$renamed_arm" 'a name matching the glob' ;;
+  esac
+
+  # THE architecture assertion. Both linux assets are .tar.xz and differ only by an infix, so a
+  # deployment glob that matched both would install an aarch64 binary on an x86-64 host. It does
+  # not — 'linux64' is not a substring of 'linuxarm64' — but that is worth pinning down rather
+  # than re-reasoning about, because the Ansible playbook globs on exactly this shape.
+  case "$renamed_arm" in
+    jellyfin-ffmpeg*portable_linux64-gpl*.tar.xz) ok "linux64 glob does NOT match an arm64 asset" matched 'no match' ;;
+    *) ok "linux64 glob does NOT match an arm64 asset" 'no match' 'no match' ;;
+  esac
+  case "$renamed" in
+    jellyfin-ffmpeg*portable_linuxarm64-gpl*.tar.xz) ok "linuxarm64 glob does NOT match an amd64 asset" matched 'no match' ;;
+    *) ok "linuxarm64 glob does NOT match an amd64 asset" 'no match' 'no match' ;;
+  esac
+  # Same trap on the windows side: winarm64-clang vs win64-clang. Positive control first — a
+  # "does not match" result proves nothing unless the same glob is shown to match something.
+  local renamed_win64; renamed_win64=$(basename "$(asset_rename "$W" '8.1.2-2')")
+  case "$renamed_win64" in
+    jellyfin-ffmpeg*portable_win64-clang-gpl*.zip) ok "win64 glob matches the win64 asset (control)" y y ;;
+    *) ok "win64 glob matches the win64 asset (control)" "$renamed_win64" 'a name matching the glob' ;;
+  esac
+  local renamed_win; renamed_win=$(basename "$(asset_rename "$WA" '8.1.2-2')")
+  case "$renamed_win" in
+    jellyfin-ffmpeg*portable_win64-clang-gpl*.zip) ok "win64 glob does NOT match a winarm64 asset" matched 'no match' ;;
+    *) ok "win64 glob does NOT match a winarm64 asset" 'no match' 'no match' ;;
+  esac
+  case "$renamed_win" in
+    jellyfin-ffmpeg*portable_winarm64-clang-gpl*.zip) ok "winarm64 glob matches the winarm64 asset (control)" y y ;;
+    *) ok "winarm64 glob matches the winarm64 asset (control)" "$renamed_win" 'a name matching the glob' ;;
+  esac
+  # Both directions, as for the linux pair — one-way exclusion is not the same claim.
+  case "$renamed_win64" in
+    jellyfin-ffmpeg*portable_winarm64-clang-gpl*.zip) ok "winarm64 glob does NOT match a win64 asset" matched 'no match' ;;
+    *) ok "winarm64 glob does NOT match a win64 asset" 'no match' 'no match' ;;
   esac
 
   ok_true  "guard trips on already-renamed" asset_renamed 'jellyfin-ffmpeg_8.1.2-2-nvenc-n13.0.19.1_portable_linux64-gpl.tar.xz'

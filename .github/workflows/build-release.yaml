@@ -20,7 +20,7 @@ on:
         type: boolean
         default: false
       mode:
-        description: 'full = build for real | dry_run = release path only (~3m) | smoke = whole pipeline minus the compile (~6m)'
+        description: 'full = build for real (~2.5h) | dry_run = release path only (~3m) | smoke = whole pipeline minus the compile (~3m)'
         type: choice
         options: [full, dry_run, smoke]
         default: full
@@ -75,11 +75,20 @@ jobs:
         run: ./.github/scripts/resolve-upstream.sh
 
   # ---------------------------------------------------------------------------------------
-  # Build jobs. The 4 wrapper steps mirror upstream's _meta_portable.yaml (L34-60) and
-  # _meta_win_clang_portable.yaml (L41-69). The build LOGIC is not copied — ./build-linux-amd64
-  # and ./msys2/build.sh come from the checked-out upstream tree, so upstream's changes to the
-  # build itself arrive for free. Only amd64 linux and win64 are built: those are what the fleet
-  # installs, and 2 jobs keep a red run meaningful instead of routine.
+  # Build jobs. The wrapper steps mirror upstream's _meta_portable.yaml (L34-60) and
+  # _meta_win_clang_portable.yaml (L22-40, L41-69). The build LOGIC is not copied —
+  # ./build-linux-amd64, ./build-linux-arm64, ./msys2/build.sh and ./msys2/buildarm64.sh all come
+  # from the checked-out upstream tree, so upstream's changes to the build itself arrive for free.
+  #
+  # 4 of upstream's 18 artifacts: the two portable linux and the two portable windows-clang
+  # targets. The arm64 pair costs nothing in wall clock (all four run in parallel; measured
+  # 143/107/135/136 min on upstream run 31869623375) and needs no new patches, because the
+  # patches attach to a BUILD SYSTEM, not a target — builder/scripts.d covers linux64 and
+  # linuxarm64, msys2/PKGBUILD covers win64 and winarm64.
+  #
+  # Deliberately still excluded: the 12 .deb packages, which are a third build system with its
+  # own unpatched header pin, and the 2 mac targets, where 50-ffnvcodec.sh:7 disables ffnvcodec
+  # outright so a build from here would be identical to upstream's.
   # ---------------------------------------------------------------------------------------
 
   build_linux:
@@ -144,6 +153,65 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: linux-amd64-portable
+          path: dist
+
+  build_linux_arm64:
+    name: 'Build portable linux arm64'
+    needs: resolve
+    if: needs.resolve.outputs.proceed == 'true' && needs.resolve.outputs.mode != 'dry_run'
+    # x86-64 on purpose. builder/images/base-linuxarm64/ is a crosstool-NG CROSS toolchain
+    # (ct-ng-config, cross.meson, rustup target add aarch64-unknown-linux-gnu) that runs on an
+    # x86-64 host — the same way upstream builds it. An arm64 runner would not help.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1   # no floating v1 tag exists for this action
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Checkout upstream at the tag
+        uses: actions/checkout@v7
+        with:
+          repository: jellyfin/jellyfin-ffmpeg   # keep in sync with env.UPSTREAM
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+
+      - name: Checkout this recipe
+        uses: actions/checkout@v7
+        with:
+          path: .fork
+          fetch-depth: 1
+
+      - name: Apply patch series
+        run: git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+
+      - name: Stub artifact (smoke only)
+        if: needs.resolve.outputs.mode == 'smoke'
+        env:
+          VER: ${{ needs.resolve.outputs.pkg_ver }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          # Must not be zero bytes — see the linux amd64 stub step.
+          echo "smoke-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_linuxarm64-gpl.tar.xz"
+
+      - name: Build portable
+        if: needs.resolve.outputs.mode != 'smoke'
+        run: ./build-linux-arm64 ./dist
+
+      # NO verify step here, and that is not an oversight: this runner is x86-64 and cannot
+      # execute the aarch64 binary it just produced. The gate runs in verify_linux_arm64 below,
+      # on an arm64 runner, and the release job requires THAT job to succeed — so an unverified
+      # binary still never reaches a release. Every other build job verifies in place because
+      # every other build job runs on its output's own platform.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-arm64-portable
           path: dist
 
   build_windows:
@@ -219,20 +287,140 @@ jobs:
           name: win-clang-win64-portable
           path: ./msys2/artifacts/*.zip
 
+  build_windows_arm64:
+    name: 'Build portable winarm64 (clang)'
+    needs: resolve
+    if: needs.resolve.outputs.proceed == 'true' && needs.resolve.outputs.mode != 'dry_run'
+    # Native arm64 windows, so msys2/buildarm64.sh runs unmodified and the verify gate below can
+    # execute the arm64 ffmpeg.exe in place. Runner and package names are upstream's own, from
+    # _meta_win_clang_portable.yaml:22-40.
+    runs-on: windows-11-arm
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: CLANGARM64
+          install: >-
+            git
+            curl
+            wget
+            zip
+            mingw-w64-clang-aarch64-toolchain
+            quilt
+            diffstat
+            mingw-w64-clang-aarch64-nasm
+
+      - name: Checkout upstream at the tag
+        uses: actions/checkout@v7
+        with:
+          repository: jellyfin/jellyfin-ffmpeg   # keep in sync with env.UPSTREAM
+          ref: ${{ needs.resolve.outputs.upstream_tag }}
+
+      - name: Checkout this recipe
+        uses: actions/checkout@v7
+        with:
+          path: .fork
+          fetch-depth: 1
+
+      - name: Apply patch series
+        run: git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+
+      - name: Prepare prefix dir
+        run: mkdir /clangarm64/ffbuild
+
+      - name: Stub artifact (smoke only)
+        if: needs.resolve.outputs.mode == 'smoke'
+        env:
+          VER: ${{ needs.resolve.outputs.pkg_ver }}
+        run: |
+          set -euo pipefail
+          mkdir -p ./msys2/artifacts
+          # Must not be zero bytes — see the linux amd64 stub step.
+          echo "smoke-run stub, not a real build" > "./msys2/artifacts/jellyfin-ffmpeg_${VER}_portable_winarm64-clang-gpl.zip"
+          # msys2/buildarm64.sh:126 writes this pointer file alongside the zip, exactly as
+          # build.sh:127 does. The stub reproduces it so smoke still catches the upload taking
+          # extra files — that is the bug that cost a full 2h23m build on the win64 side.
+          echo "jellyfin-ffmpeg_${VER}_portable_winarm64-clang-gpl.zip" > "./msys2/artifacts/winarm64-clang-gpl.txt"
+
+      - name: Build portable
+        if: needs.resolve.outputs.mode != 'smoke'
+        run: ./msys2/buildarm64.sh
+
+      # Runs on the binary's own platform, same as the win64 job.
+      - name: Verify the binary carries the features
+        if: needs.resolve.outputs.mode == 'full'
+        run: .fork/.github/scripts/verify-binary.sh "$(find . -name ffmpeg.exe -type f | head -1)"
+
+      # Only the zip — buildarm64.sh:126 drops a winarm64-clang-gpl.txt pointer here too.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: win-clang-winarm64-portable
+          path: ./msys2/artifacts/*.zip
+
+  # ---------------------------------------------------------------------------------------
+  # The gate that build_linux_arm64 cannot run itself. Downloads that job's artifact onto an
+  # arm64 runner and applies the same verify-binary.sh every other build job applies in place.
+  # The release job requires this job to succeed, so the protection is equivalent: a featureless
+  # arm64 binary exists as a CI artifact but is never published.
+  # ---------------------------------------------------------------------------------------
+
+  verify_linux_arm64:
+    name: 'Verify portable linux arm64'
+    needs: [resolve, build_linux_arm64]
+    if: needs.resolve.outputs.proceed == 'true' && needs.resolve.outputs.mode != 'dry_run'
+    runs-on: ubuntu-24.04-arm
+    steps:
+      # Only this repo — the script is all that is needed, not the upstream tree.
+      - uses: actions/checkout@v7
+        with:
+          path: .fork
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: linux-arm64-portable
+          path: dist
+
+      # Skipped in smoke, where the artifact is a text stub. The JOB still runs in smoke, which
+      # is what proves the ubuntu-24.04-arm label allocates without spending 2.5h to find out.
+      - name: Verify the binary carries the features
+        if: needs.resolve.outputs.mode == 'full'
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d); tar xf dist/*_portable_linuxarm64-gpl.tar.xz -C "$tmp"
+          .fork/.github/scripts/verify-binary.sh "$(find "$tmp" -name ffmpeg -type f | head -1)"
+
   # ---------------------------------------------------------------------------------------
 
   release:
     name: 'Publish release'
-    needs: [resolve, build_linux, build_windows]
-    # always() so dry_run's skipped build jobs do not skip this one too. The two explicit
-    # success checks keep `needs:` as the real gate otherwise: a failed build means no release,
-    # with no artifact-presence probing needed.
+    needs: [resolve, build_linux, build_linux_arm64, build_windows, build_windows_arm64, verify_linux_arm64]
+    # always() so dry_run's skipped build jobs do not skip this one too. The explicit success
+    # checks keep `needs:` as the real gate otherwise: any failed build means no release, with no
+    # artifact-presence probing needed.
+    #
+    # All four builds are required rather than treating the arm pair as best-effort. They ride
+    # the same two build systems as their amd64 counterparts, and in the two runs of upstream's
+    # full 18-job matrix that got far enough to tell, all four arm jobs were green — every
+    # failure observed there was a .deb job, which this repo does not build. Publishing a partial
+    # set would also be sticky: the next day resolves proceed=false, so the missing assets would
+    # never be retried without a forced rebuild.
+    #
+    # verify_linux_arm64 is listed because that job IS build_linux_arm64's gate. Its own `if:`
+    # carries no status function, so GitHub adds an implicit success() and the job is 'skipped'
+    # (not 'success') whenever that build fails — which keeps this check correct.
     if: >-
       always()
       && needs.resolve.outputs.proceed == 'true'
       && ( needs.resolve.outputs.mode == 'dry_run'
            || ( needs.build_linux.result == 'success'
-                && needs.build_windows.result == 'success' ) )
+                && needs.build_linux_arm64.result == 'success'
+                && needs.build_windows.result == 'success'
+                && needs.build_windows_arm64.result == 'success'
+                && needs.verify_linux_arm64.result == 'success' ) )
     runs-on: ubuntu-latest
     steps:
       - name: Download built artifacts
@@ -242,9 +430,10 @@ jobs:
           path: dist
           merge-multiple: true
 
-      # dry_run skips the build jobs entirely, so there is nothing to download — stub the two
+      # dry_run skips the build jobs entirely, so there is nothing to download — stub the four
       # filenames the builds would have produced. Names come from debian/changelog via
-      # builder/build.sh:88, which is why pkg_ver is read from there rather than from the tag.
+      # builder/build.sh:88 and msys2/build*.sh, which is why pkg_ver is read from there rather
+      # than from the tag.
       - name: Stub artifacts (dry_run only)
         if: needs.resolve.outputs.mode == 'dry_run'
         env:
@@ -255,7 +444,9 @@ jobs:
           # Must not be zero bytes: the asset upload API rejects empty files with
           # "HTTP 400: Bad Content-Length".
           echo "dry-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_linux64-gpl.tar.xz"
+          echo "dry-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_linuxarm64-gpl.tar.xz"
           echo "dry-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_win64-clang-gpl.zip"
+          echo "dry-run stub, not a real build" > "dist/jellyfin-ffmpeg_${VER}_portable_winarm64-clang-gpl.zip"
 
       # Upstream names assets from debian/changelog only, so a fork build is byte-identically
       # named to a stock one — which matters when the file is downloaded by hand. Suffixing the
@@ -280,14 +471,17 @@ jobs:
             }
             mv "$f" "$new"
           done
-          # Assert identity, not cardinality. A count of 2 passes for two wrong files, or the
-          # same file twice — it only caught the stray .txt by accident, because 3 != 2.
+          # Assert identity, not cardinality. A count of 4 passes for four wrong files, or the
+          # same file four times — the old count-only check caught the stray .txt by accident,
+          # because 3 != 2. Name each one, then count.
           for want in "jellyfin-ffmpeg_${VER}-nvenc-${PIN_NAME}_portable_linux64-gpl.tar.xz" \
-                      "jellyfin-ffmpeg_${VER}-nvenc-${PIN_NAME}_portable_win64-clang-gpl.zip"; do
+                      "jellyfin-ffmpeg_${VER}-nvenc-${PIN_NAME}_portable_linuxarm64-gpl.tar.xz" \
+                      "jellyfin-ffmpeg_${VER}-nvenc-${PIN_NAME}_portable_win64-clang-gpl.zip" \
+                      "jellyfin-ffmpeg_${VER}-nvenc-${PIN_NAME}_portable_winarm64-clang-gpl.zip"; do
             [ -f "dist/$want" ] || { echo "::error::missing expected asset: $want"; exit 1; }
           done
           n=$(find dist -type f | wc -l)
-          [ "$n" -eq 2 ] || { echo "::error::expected exactly those 2 assets, found $n:"; ls -1 dist; exit 1; }
+          [ "$n" -eq 4 ] || { echo "::error::expected exactly those 4 assets, found $n:"; ls -1 dist; exit 1; }
           echo "--- to upload ---"; ls -l dist
 
 
@@ -315,7 +509,11 @@ jobs:
             echo "\`patches/jellyfin-ffmpeg/\`. Reproduce with:"
             echo '```'
             echo "git clone -b ${UPSTREAM_TAG} https://github.com/${UPSTREAM}.git && cd jellyfin-ffmpeg"
-            echo "git apply /path/to/patches/jellyfin-ffmpeg/*.patch && ./build-linux-amd64 ./dist"
+            echo "git apply /path/to/patches/jellyfin-ffmpeg/*.patch"
+            echo "./build-linux-amd64 ./dist    # linux64    (needs docker)"
+            echo "./build-linux-arm64 ./dist    # linuxarm64 (needs docker; cross-compiled on x86-64)"
+            echo "./msys2/build.sh              # win64      (needs msys2 CLANG64)"
+            echo "./msys2/buildarm64.sh         # winarm64   (needs msys2 CLANGARM64 on arm64 windows)"
             echo '```'
             echo
             echo "Assets carry \`-nvenc-${PIN_NAME}\` in the filename to distinguish them from"

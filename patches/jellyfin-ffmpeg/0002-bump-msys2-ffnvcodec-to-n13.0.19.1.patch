@@ -1,5 +1,5 @@
 diff --git a/msys2/PKGBUILD/50-mingw-w64-ffnvcodec-headers/PKGBUILD b/msys2/PKGBUILD/50-mingw-w64-ffnvcodec-headers/PKGBUILD
-index 8042bfc..bfad0f7 100644
+index 8042bfc..36e6375 100644
 --- a/msys2/PKGBUILD/50-mingw-w64-ffnvcodec-headers/PKGBUILD
 +++ b/msys2/PKGBUILD/50-mingw-w64-ffnvcodec-headers/PKGBUILD
 @@ -3,7 +3,7 @@
@@ -11,11 +11,26 @@ index 8042bfc..bfad0f7 100644
  pkgrel=1
  pkgdesc='FFmpeg version of headers required to interface with Nvidias codec APIs (mingw-w64)'
  arch=('any')
-@@ -11,7 +11,7 @@ mingw_arch=('mingw32' 'mingw64' 'ucrt64' 'clang64' 'clang32' 'clangarm64')
+@@ -11,7 +11,22 @@ mingw_arch=('mingw32' 'mingw64' 'ucrt64' 'clang64' 'clang32' 'clangarm64')
  url=https://github.com/FFmpeg/nv-codec-headers.git
  license=('spdx:MIT')
  makedepends=("git")
 -_tag=451da99614412a7f9526ef301a5ee0c7a6f9ad76
++# Bumped for -tune uhq, -tf_level, -lookahead_level and -split_encode_mode.
++#
++# This is the WINDOWS pin, and it covers BOTH windows targets: msys2/build.sh:17 and
++# msys2/buildarm64.sh:17 both loop over this PKGBUILD dir, so win64 and winarm64 share it.
++#
++# There is a SECOND, unrelated pin for linux in builder/scripts.d/50-ffnvcodec.sh (patch 0001),
++# and a third for the .deb packages inline in docker-build.sh, which this repo does not build.
++# Moving one and not the other fails silently: you get a binary with NVENC but none of the
++# options above. That is not hypothetical, and it was THIS file that was missed -- a win64
++# asset shipped with NVENC and no tuning options at all.
++#
++#   version      commit    date        min driver: linux / windows
++#   n12.0.16.1   451da996  2023-09-28  520.56.06 / 522.25   upstream's pin
++#   n13.0.19.1   88fee5c3  2026-07-14  570.0     / 570.0    <- this one
++#   n13.1.15.0   0a6fba9a  2026-07-14  610.0     / 610.0    newest tag, floor too high
 +_tag=88fee5c37318c991a8762d423530f91681e32e3a
  source=("git+https://github.com/FFmpeg/nv-codec-headers.git#tag=${_tag}"
          "01-Load-nvEncodeAPI-dll-for-native-Windows-ARM64.patch")
