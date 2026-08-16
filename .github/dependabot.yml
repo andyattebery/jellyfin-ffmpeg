@@ -1,0 +1,14 @@
+version: 2
+
+# Action refs are floating majors (@v7, @v8), so patch and minor updates arrive on their own.
+# What they do NOT catch is a new major — @v7 never becomes @v8. Dependabot opens a PR for that.
+# Native to GitHub, so unlike Renovate there is no app to install and nothing to keep alive.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: ci
+    labels:
+      - dependencies

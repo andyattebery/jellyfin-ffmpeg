@@ -1,4 +1,4 @@
-name: '🔄 Build and release'
+name: 'Build and release'
 
 # Checks out jellyfin/jellyfin-ffmpeg at an upstream tag, applies patches/, builds, releases.
 # See README.md for what this repo is and why.
@@ -129,6 +129,18 @@ jobs:
         if: needs.resolve.outputs.mode != 'smoke'
         run: ./build-linux-amd64 ./dist
 
+      # Ask ffmpeg, don't grep the binary. -h reads the encoder's static AVOption table and
+      # -filters the compiled-in filter list; neither loads the NVIDIA driver, so this works on
+      # a runner with no GPU. This is the only check that actually proves the build did what
+      # the fork exists to do — a win64 asset missing every one of these was published because
+      # nothing here looked past the plumbing.
+      - name: Verify the binary carries the features
+        if: needs.resolve.outputs.mode == 'full'
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d); tar xf dist/*_portable_linux64-gpl.tar.xz -C "$tmp"
+          .fork/.github/scripts/verify-binary.sh "$(find "$tmp" -name ffmpeg -type f | head -1)"
+
       - uses: actions/upload-artifact@v7
         with:
           name: linux-amd64-portable
@@ -191,6 +203,13 @@ jobs:
       - name: Build portable
         if: needs.resolve.outputs.mode != 'smoke'
         run: ./msys2/build.sh
+
+      # Same gate as the linux job, run natively on the windows runner. This is the check that
+      # would have caught the win64 asset shipping with NVENC but none of the tuning options,
+      # because Windows pins the headers in msys2/PKGBUILD, not builder/scripts.d.
+      - name: Verify the binary carries the features
+        if: needs.resolve.outputs.mode == 'full'
+        run: .fork/.github/scripts/verify-binary.sh "$(find . -name ffmpeg.exe -type f | head -1)"
 
       # Only the zip. msys2/build.sh:127 also drops a <target>-<variant>.txt pointer file into
       # this directory for upstream's own publish flow; uploading it would put a third file in
@@ -261,11 +280,16 @@ jobs:
             }
             mv "$f" "$new"
           done
+          # Assert identity, not cardinality. A count of 2 passes for two wrong files, or the
+          # same file twice — it only caught the stray .txt by accident, because 3 != 2.
+          for want in "jellyfin-ffmpeg_${VER}-nvenc-${PIN_NAME}_portable_linux64-gpl.tar.xz" \
+                      "jellyfin-ffmpeg_${VER}-nvenc-${PIN_NAME}_portable_win64-clang-gpl.zip"; do
+            [ -f "dist/$want" ] || { echo "::error::missing expected asset: $want"; exit 1; }
+          done
           n=$(find dist -type f | wc -l)
-          [ "$n" -eq 2 ] || { echo "::error::expected 2 assets, found $n"; exit 1; }
-          unmarked=$(find dist -type f ! -name '*-nvenc-*' | wc -l)
-          [ "$unmarked" -eq 0 ] || { echo "::error::$unmarked asset(s) missing the fork marker"; exit 1; }
+          [ "$n" -eq 2 ] || { echo "::error::expected exactly those 2 assets, found $n:"; ls -1 dist; exit 1; }
           echo "--- to upload ---"; ls -l dist
+
 
       - name: Publish
         env:
@@ -307,11 +331,22 @@ jobs:
             LATEST=(--prerelease --latest=false)
           fi
 
-          # Delete-then-create keeps this to one code path: a first release and a re-run after
-          # a failure behave identically, with no "tag already exists" branch. Safe because
-          # release immutability is not enabled on this repo; if it is ever turned on, published
-          # releases and their tags become undeletable and this needs revisiting.
-          gh release delete --cleanup-tag --yes "$TAG" || true
+          # Never delete an existing REAL release to republish it. delete->create is not
+          # atomic, so a create failure after the delete would destroy a good release that
+          # deployments depend on. Test releases are disposable, so they keep the simple path.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            if [ "$MODE" = "full" ]; then
+              echo "Release $TAG exists — updating in place, not recreating."
+              gh release edit "$TAG" "${LATEST[@]}" \
+                --title "${UPSTREAM_TAG} (nv-codec-headers ${PIN_NAME})" \
+                --notes-file notes.md
+              # --clobber replaces assets of the same name; the release is never absent.
+              gh release upload "$TAG" dist/* --clobber
+              echo "Updated $TAG with $(find dist -type f | wc -l) assets"
+              exit 0
+            fi
+            gh release delete --cleanup-tag --yes "$TAG"
+          fi
           # Creates the tag at --target if it does not exist. Internally this creates a draft,
           # uploads the assets, then publishes — so a failed upload leaves nothing behind.
           gh release create "$TAG" \
