@@ -12,6 +12,12 @@ separate upstream build system with its own unpatched header pin. See
 Same shape as [BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds), which
 jellyfin-ffmpeg's own `builder/` directory is derived from.
 
+**Two kinds of patch live here, and they behave differently.** `0001`/`0002` patch *build systems*
+— they move a dependency pin, and each covers only the targets its build system produces.
+`0003` patches the *ffmpeg source*, by adding to jellyfin-ffmpeg's own `debian/patches/` series;
+every build system applies that series, so one patch covers everything. Anywhere below that says
+"the patches attach to a build system", read it as being about `0001`/`0002`.
+
 ## Why this exists
 
 Two machines need to run the *same* ffmpeg so a transcode job can go to either:
@@ -23,7 +29,7 @@ Two machines need to run the *same* ffmpeg so a transcode job can go to either:
 | **this** | yes | yes |
 
 `tonemap_cuda` comes from `0004-add-cuda-tonemap-impl.patch`, one of 97 patches in
-jellyfin-ffmpeg's `debian/patches/series`, so no vanilla build has it. And jellyfin-ffmpeg pins
+jellyfin-ffmpeg's `debian/patches/series` (98 with `0003` below), so no vanilla build has it. And jellyfin-ffmpeg pins
 nv-codec-headers at `n12.0.16.1`, which predates `NVENC_HAVE_UHQ_TUNING`. One binary needs both,
 and nobody publishes it.
 
@@ -44,9 +50,11 @@ platform: each of those two files feeds both an amd64 and an arm64 target.
 
 Upstream produces **18 artifacts**. This repo builds **4**.
 
-The patches attach to a *build system*, not to a target, which is why the arm64 pair was nearly
+`0001`/`0002` attach to a *build system*, not to a target, which is why the arm64 pair was nearly
 free — the same two patches cover all four portable targets, and all four run in parallel, so
-adding them changed nothing about wall clock:
+adding them changed nothing about wall clock. (`0003` is not in this table's logic at all: it goes
+into the ffmpeg patch series, so it applies to every target every build system produces, including
+the `.deb` and mac builds this repo does not make.)
 
 | artifact | built here | covered by |
 |---|---|---|
@@ -59,7 +67,7 @@ adding them changed nothing about wall clock:
 | `ubuntu-{jammy,noble,resolute}-{amd64,arm64}` | no | **nothing** |
 
 **The 12 `.deb` packages are the one real gap.** They come from a third, separate build system
-(`Dockerfile.in` + `docker-build.sh`) with its **own** nv-codec-headers pin that neither patch
+(`Dockerfile.in` + `docker-build.sh`) with its **own** nv-codec-headers pin that neither pin patch
 touches. Two consequences:
 
 - this repo publishes **no `.deb`** — install jellyfin-ffmpeg from a package and you get stock,
@@ -69,12 +77,48 @@ touches. Two consequences:
   asset once: a build system whose pin nobody patched, failing quietly rather than loudly.
 
 Adding `.deb` is therefore a different proposition from adding the arm64 targets was: a different
-build system, a third patch, and roughly triple the matrix.
+build system, another pin patch, and roughly triple the matrix. (`0003` would need no such
+duplicate — see below.)
 
 ## Driver floor
 
 **570.0.** Check `nvidia-smi` before installing. `n13.1.15.0` would raise it to 610.0, which is
 why the pin stops where it does.
+
+## Patch 0003 — VAAPI import of the alpha 10-bit RGB DRM formats
+
+**Carried, applying cleanly, and NOT verified end to end.** Read it as a change in flight, not a
+feature of these binaries.
+
+Vulkan exports a single-plane 10-bit RGB image as `DRM_FORMAT_ARGB2101010` or `ABGR2101010` —
+`hwcontext_vulkan.c`'s `vkfmt_to_drmfmt()` returns the first table match and the alpha spellings
+are listed first. `hwcontext_vaapi.c`'s `vaapi_drm_format_map` carries only the **X** spellings
+(upstream has `X2R10G10B10`; jellyfin's own `0038` adds `X2B10G10R10`). So mapping such a frame to
+VAAPI fails:
+
+```
+[AVHWFramesContext] DRM format not supported by VAAPI.
+[Parsed_hwmap]      Failed to map frame: -22.
+```
+
+X and A differ only in whether the top two bits are meaningful — identical layout — and the driver
+takes the surface either way, verified on Mesa 26.0.4 / RX 9070 XT before writing the patch
+(`-vf format=x2rgb10,hwupload,scale_vaapi=format=p010` returns 0). The patch adds two lines, each
+alpha fourcc mapped to the X fourcc of the **same** channel order, following the pairing `0038`
+already established.
+
+**Why:** on RDNA4 a *multiplane* Vulkan target (`nv12`, `p010`) costs about **2×** — measured 9.98 s
+against 19.46 s at equal bit depth, with the penalty following the multiplane frame rather than the
+filter writing it. So a fast Vulkan tonemap chain has to keep the Vulkan side single-plane, which
+today means 8-bit `bgra` widened to `p010` by VAAPI's VPP: full speed, 8-bit precision. A
+single-plane **10-bit** RGB target would keep both, and this is the only thing blocking it.
+
+**What is not proven.** That the chain is faster with it, that the channel order is right in
+practice, or that 10-bit precision is visibly better than the 8-bit path already in use. The first
+two need a build from this repo; the third is a quality measurement and does not need a build at
+all. **`verify-binary.sh` cannot cover this** — it reads `-h encoder=` and `-filters`, and a format
+table entry appears in neither. Proving it needs a `hwmap` on AMD hardware, which a GPU-less runner
+does not have, so `0003` is outside the gate by construction rather than by omission.
 
 ## Layout
 
@@ -83,6 +127,8 @@ patches/jellyfin-ffmpeg/          applied in filename order with `git apply`
   0001  linux   nv-codec-headers pin   builder/scripts.d/50-ffnvcodec.sh      (amd64 + arm64)
   0002  windows nv-codec-headers pin   msys2/PKGBUILD/50-mingw-w64-ffnvcodec-headers
                                                                               (win64 + winarm64)
+  0003  all     ffmpeg source          debian/patches/0098-...  + series      (all targets)
+                VAAPI import of the alpha 10-bit RGB DRM formats — see below
 .github/workflows/build-release.yaml   resolve -> build all four -> verify -> publish
 .github/scripts/resolve-upstream.sh    which upstream release to build; --self-test, --plan
 .github/scripts/verify-binary.sh       the gate: asks ffmpeg whether the build has the features
@@ -154,8 +200,9 @@ has disabled.) Those scripts are reached via `ENTRYPOINT`, not a call site, so g
 `configure` also gates on the version, but needs no patch: its chain's first branch is
 `ffnvcodec >= 12.1.14.0` with no upper bound, which accepts 13.x.
 
-**If .deb builds are ever added here, they need a third patch** — otherwise they silently ship
-the old headers.
+**If .deb builds are ever added here, they need a third pin patch** — otherwise they silently ship
+the old headers. **`0003` is not affected by any of this**: it lives in the ffmpeg patch series that
+every one of these build systems applies, so it needs no per-build-system duplicate.
 
 ## Build time
 
@@ -205,8 +252,14 @@ Deployment globs are unambiguous between architectures and `--self-test` pins th
 
 ## Retiring this
 
-If upstream ever bumps its own pin, `git apply` stops applying and the build fails loudly. That
-is the signal: delete this repo and use stock jellyfin-ffmpeg.
+If upstream ever bumps its own pin, `git apply` stops applying and the build fails loudly. That is
+the signal — but it now retires **`0001`/`0002` only**. `0003` is an independent reason to keep a
+recipe here, and it retires on its own condition: upstream jellyfin-ffmpeg (or ffmpeg) accepting the
+alpha 10-bit RGB DRM entries. Check both before deleting anything.
+
+`0003` is also the more fragile of the two to an upstream release: its series hunk's context is the
+last three lines of `debian/patches/series`, so a new upstream patch appended there makes `git apply`
+fail rather than misorder — the safe direction, and the same loud-failure signal.
 
 ## Checking a built binary by hand
 

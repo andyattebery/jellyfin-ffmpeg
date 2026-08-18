@@ -1,0 +1,72 @@
+diff --git a/debian/patches/0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch b/debian/patches/0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
+new file mode 100644
+--- /dev/null
++++ b/debian/patches/0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
+@@ -0,0 +1,59 @@
++Allow VAAPI to import the ALPHA spellings of the 10-bit RGB DRM formats.
++
++Vulkan exports a single-plane 10-bit RGB image as DRM_FORMAT_ARGB2101010 or
++DRM_FORMAT_ABGR2101010, never the X variants: hwcontext_vulkan.c's
++vkfmt_to_drmfmt() returns the first match in vulkan_drm_format_map, and that
++table lists the alpha spellings first --
++
++    { DRM_FORMAT_ARGB2101010, VK_FORMAT_A2B10G10R10_UNORM_PACK32 },
++    { DRM_FORMAT_ABGR2101010, VK_FORMAT_A2R10G10B10_UNORM_PACK32 },
++    { DRM_FORMAT_XRGB2101010, VK_FORMAT_A2B10G10R10_UNORM_PACK32 },
++    { DRM_FORMAT_XBGR2101010, VK_FORMAT_A2R10G10B10_UNORM_PACK32 },
++
++-- while vaapi_drm_format_map carries only the X spellings, patch 0038 having
++added X2B10G10R10 alongside upstream's X2R10G10B10. So mapping a Vulkan
++x2rgb10/x2bgr10 frame to VAAPI fails:
++
++    [AVHWFramesContext] DRM format not supported by VAAPI.
++    [Parsed_hwmap] Failed to map frame: -22.
++
++X and A differ only in whether the top two bits are meaningful; the memory
++layout is identical, and the driver accepts the surface either way -- verified
++on Mesa 26.0.4 / RX 9070 XT (gfx1201) before writing this:
++
++    -vf format=x2rgb10,hwupload,scale_vaapi=format=p010    rc=0
++
++Each alpha fourcc is mapped to the X fourcc of the SAME channel order, matching
++the pairing 0038 already established.
++
++Why it matters: it is the last thing between a VAAPI -> Vulkan -> VAAPI
++tonemapping chain and 10-bit output at full speed. On that hardware a MULTIPLANE
++Vulkan target (nv12, p010) costs ~2x -- measured 9.98 s against 19.46 s at equal
++bit depth, and the penalty follows the multiplane frame rather than the filter
++writing it -- so the fast chain must keep the Vulkan side single-plane. Today
++that forces 8-bit bgra and lets VAAPI's VPP widen to p010, which delivers the
++speed but only 8-bit precision. A single-plane 10-bit RGB target would keep both,
++and this is what blocks it.
++
++NOT addressed here: VA also advertises the alpha surface fourccs themselves
++(A2R10G10B10 / A2B10G10R10 show as "unknown" in vaapi_format_map). Naming them
++would need an alpha 10-bit RGB AVPixelFormat, which ffmpeg does not have, and
++nothing needs it -- the X mappings carry the same bytes.
++
++Index: FFmpeg/libavutil/hwcontext_vaapi.c
++===================================================================
++--- FFmpeg.orig/libavutil/hwcontext_vaapi.c
+++++ FFmpeg/libavutil/hwcontext_vaapi.c
++@@ -1078,6 +1078,12 @@ static const struct {
++ #if defined(VA_FOURCC_X2B10G10R10) && defined(DRM_FORMAT_XBGR2101010)
++     DRM_MAP(X2B10G10R10, 1, DRM_FORMAT_XBGR2101010),
++ #endif
+++#if defined(VA_FOURCC_X2R10G10B10) && defined(DRM_FORMAT_ARGB2101010)
+++    DRM_MAP(X2R10G10B10, 1, DRM_FORMAT_ARGB2101010),
+++#endif
+++#if defined(VA_FOURCC_X2B10G10R10) && defined(DRM_FORMAT_ABGR2101010)
+++    DRM_MAP(X2B10G10R10, 1, DRM_FORMAT_ABGR2101010),
+++#endif
++ };
++ #undef DRM_MAP
++ 
+diff --git a/debian/patches/series b/debian/patches/series
+--- a/debian/patches/series
++++ b/debian/patches/series
+@@ -95,3 +95,4 @@
+ 0095-add-scale-d3d11-p010-shader-fallback.patch
+ 0096-fix-full-range-input-for-mjpeg-vaapi-encoder.patch
+ 0097-add-misc-enhancements-to-mfenc-hw-encoder.patch
++0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
