@@ -1,0 +1,580 @@
+diff --git a/debian/patches/0099-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch b/debian/patches/0099-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch
+new file mode 100644
+--- /dev/null
++++ b/debian/patches/0099-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch
+@@ -0,0 +1,567 @@
++Add Dolby Vision RPU passthrough to the HEVC VAAPI encoder.
++
++hevc_vaapi drops Dolby Vision on transcode. FFmpeg has all the machinery --
++the HEVC decoder parses the RPU and attaches AV_FRAME_DATA_DOVI_METADATA to
++every frame, and dovi_rpuenc.c can synthesise the RPU back out -- but only
++libx265, libsvtav1 and libaomenc are wired to it. No VAAPI, Vulkan or AMF
++encoder calls ff_dovi_configure(), so on AMD Linux there is no way to keep DV
++through a hardware encode: the current answer is to encode the base layer,
++then re-inject the RPU afterwards with dovi_tool and remux. That matters more
++now that AMD has dropped AMF from the Linux driver (25.20 release notes) and
++told users to move to VA-API, which takes rigaya's VCEEncC -- the one tool
++that does this in a single pass -- off the table.
++
++This wires hevc_vaapi to the existing DOVI code, following libx265.c.
++
++Two things are different from a software encoder and drive the shape of it.
++
++1. The RPU is a SUFFIX NAL. It must be the last NAL of the access unit --
++   hevcdec.c says so in as many words ("RPUs are appended to the end of an AU;
++   they are the last non-EOB/EOS NAL in the AU") and reads
++   s->pkt.nals[s->pkt.nb_nals - 1], and the dovi_rpu BSF likewise only looks at
++   au->units[au->nb_units - 1]. VAAPI packed headers are always written ahead
++   of the slice data, so write_extra_header() cannot place it. The RPU is
++   therefore generated when the picture is issued, carried on the picture, and
++   concatenated onto the coded data in vaapi_encode_get_coded_data().
++
++   Generating at issue time also means the RPUs are produced in encode order,
++   which is bitstream order, which is the order the decoder consumes them in.
++   That is the correct order for a stateful RPU sequence; libx265 feeds them in
++   display order and lets the encoder reorder.
++
++   ff_dovi_rpu_generate() with FF_DOVI_WRAP_NAL returns the emulation-prevented
++   payload beginning with the 0x19 prefix byte and nothing else, so the start
++   code and the two-byte NAL header are prepended here: 0x7c 0x01 is
++   nal_unit_type 62 (UNSPEC62), nuh_layer_id 0, nuh_temporal_id_plus1 1, which
++   is what hevcdec.c requires (!nuh_layer_id && !temporal_id). 0x7e would be
++   type 63, the enhancement layer.
++
++2. ff_dovi_configure() reads avctx->pix_fmt to decide whether the coded samples
++   are 10-bit 4:2:0. For a VAAPI encoder that is AV_PIX_FMT_VAAPI, which tells
++   it nothing, so unless -strict unofficial is passed the profile check zeroes
++   dv_profile and Dolby Vision silently never engages. The configure step here
++   therefore calls ff_dovi_configure_from_codedpar() with the hardware frames'
++   sw_format instead, normalised to AV_PIX_FMT_YUV420P10 when it describes
++   10-bit 4:2:0 -- VAAPI's spelling is P010, which is the same sample format.
++   Anything that is not 10-bit 4:2:0 is passed through unchanged and correctly
++   ends up with no DV profile.
++
++   Going through ff_dovi_configure_from_codedpar() also keeps the configuration
++   record landing on avctx->coded_side_data, so movenc writes dvcC/dvvC (with
++   -strict unofficial) and matroskaenc writes the BlockAdditionMapping. The
++   output is signalled DV without a separate mkvmerge pass.
++
++Behaviour matches libx265: -dolbyvision defaults to auto, meaning DV is enabled
++only when avctx->decoded_side_data carries an AVDOVIMetadata; a frame arriving
++without AV_FRAME_DATA_DOVI_METADATA once a profile is active is an error rather
++than a silently non-conforming stream. Profile 7 input still needs converting
++to 8.1 first, exactly as for libx265 -- dovi_configure_ext() refuses profiles 4
++and 7 outright.
++
++Level 5 handling (-dv_l5)
++-------------------------
++
++L5 states the active picture area as four pixel offsets from the frame edges,
++so the display can exclude letterbox bars from its analysis. The offsets are
++absolute pixels: a 2.39:1 film coded 3840x2160 carries top/bottom offsets of
++about 140. ff_dovi_rpu_generate() writes them through verbatim
++(dovi_rpuenc.c, 13-bit fields) and has no idea what resolution it is encoding
++at, so resizing the frame leaves them stale -- scale to 1920x1080 and the RPU
++still claims 140 rows of bar where there are now 70.
++
++The encoder cannot detect this on its own: the ffmpeg filter chain runs before
++the encoder, so the AVFrame arriving at init_picture_params has already been
++scaled and its dimensions always equal avctx->width/height. The source size
++therefore has to be supplied.
++
++  -dv_l5 keep     (default) pass the offsets through unchanged
++  -dv_l5 zero     clear them, for when the bars were cropped away
++  -dv_l5 scale    rescale them from -dv_l5_canvas to the output size
++
++  -dv_l5_canvas WxH   the frame size the source offsets refer to
++
++So a 2160p source letterboxed in a 16:9 frame, scaled to 1080p, wants
++`-dv_l5 scale -dv_l5_canvas 3840x2160`; a chain that crops the bars off first
++wants `-dv_l5 zero`. The default is keep, so same-resolution encodes are
++unaffected and the option only engages when asked for. dv_l5=scale without
++dv_l5_canvas is rejected at init rather than mid-encode.
++
++Left and right scale by the width ratio, top and bottom by the height ratio,
++so a change of aspect is handled. Values round to nearest and clamp to the
++13-bit field. Streams with no L5 block need no adjustment and are left alone;
++the metadata is only copied when there is an L5 block to change, and the copy
++is a byte-for-byte duplicate of the side data (AVDOVIMetadata is a flat buffer
++addressed by internal offsets, so every accessor stays valid).
++
++Not covered:
++
++- Only hevc_vaapi. av1_vaapi would need the T.35 wrapping path
++  (FF_DOVI_WRAP_T35) instead, and h264_vaapi has no DV profile worth having.
++- The non_independent_frame path in vaapi_encode_output(), which concatenates a
++  frame's data into the next packet, is not handled; it is AV1-only, so an HEVC
++  picture never takes it. The RPU is freed with the picture either way.
++- avctx->framerate is used for the DV level calculation, as in libx265, so an
++  unset framerate gives a level derived from 0 fps. Pass -r if it matters.
++
++Verified: builds clean against jellyfin-ffmpeg v8.1.2-2 with the full series
++applied, no new warnings under FFmpeg's own -Wall set, and -h encoder=hevc_vaapi
++lists all three options with the right types and defaults. The L5 functions were
++additionally unit-tested by extracting them verbatim and running them against
++metadata built with av_dovi_metadata_alloc(): keep/zero/scale behaviour, the
++2160->1080 and 2160->720 ratios, independent x and y scaling, rounding, the
++13-bit clamp, the no-L5 and identity no-ops, that the source metadata is never
++mutated, and that neighbouring extension blocks survive the copy intact.
++
++NOT verified on hardware -- there is no AMD GPU in the build environment. A real
++encode still needs checking with dovi_tool info and on a Dolby Vision display.
++Index: FFmpeg/configure
++===================================================================
++--- FFmpeg.orig/configure
+++++ FFmpeg/configure
++@@ -3640,7 +3640,7 @@
++ hevc_rkmpp_decoder_select="hevc_mp4toannexb_bsf dump_extradata_bsf dovi_rpudec hevcparse"
++ hevc_rkmpp_encoder_deps="rkmpp"
++ hevc_vaapi_encoder_deps="VAEncPictureParameterBufferHEVC"
++-hevc_vaapi_encoder_select="atsc_a53 cbs_h265 vaapi_encode"
+++hevc_vaapi_encoder_select="atsc_a53 cbs_h265 dovi_rpuenc vaapi_encode"
++ hevc_vulkan_encoder_select="atsc_a53 cbs_h265 vulkan_encode"
++ hevc_v4l2m2m_decoder_deps="v4l2_m2m hevc_v4l2_m2m"
++ hevc_v4l2m2m_decoder_select="hevc_mp4toannexb_bsf"
++Index: FFmpeg/libavcodec/vaapi_encode.h
++===================================================================
++--- FFmpeg.orig/libavcodec/vaapi_encode.h
+++++ FFmpeg/libavcodec/vaapi_encode.h
++@@ -95,6 +95,20 @@
++     char tail_data[MAX_PARAM_BUFFER_SIZE];
++     /** Byte length of tail_data. */
++     size_t tail_size;
+++
+++    /**
+++     * Dolby Vision RPU for this picture as a complete Annex B NAL unit
+++     * (start code + NAL header + payload), or NULL if there is none.
+++     *
+++     * The RPU is a suffix NAL: it must be the last NAL of the access unit,
+++     * so it cannot be submitted as a VAAPI packed header - those are always
+++     * written ahead of the slice data. It is therefore generated when the
+++     * picture is issued and concatenated onto the coded data on output.
+++     *
+++     * Allocated by the codec's init_picture_params, owned by the picture.
+++     */
+++    uint8_t        *dovi_rpu;
+++    size_t          dovi_rpu_size;
++ } VAAPIEncodePicture;
++ 
++ typedef struct VAAPIEncodeProfile {
++Index: FFmpeg/libavcodec/vaapi_encode.c
++===================================================================
++--- FFmpeg.orig/libavcodec/vaapi_encode.c
+++++ FFmpeg/libavcodec/vaapi_encode.c
++@@ -743,6 +743,9 @@
++         goto end;
++     total_size += ret;
++ 
+++    /* Reserve room for the Dolby Vision RPU appended after the slice data. */
+++    total_size += pic->dovi_rpu_size;
+++
++     ret = ff_get_encode_buffer(avctx, pkt, total_size, 0);
++     if (ret < 0)
++         goto end;
++@@ -758,6 +761,13 @@
++     if (ret < 0)
++         goto end;
++ 
+++    /* The RPU must be the last NAL of the access unit. */
+++    if (pic->dovi_rpu_size) {
+++        memcpy(ptr, pic->dovi_rpu, pic->dovi_rpu_size);
+++        av_freep(&pic->dovi_rpu);
+++        pic->dovi_rpu_size = 0;
+++    }
+++
++ end:
++     av_refstruct_unref(&ctx->coded_buffer_ref);
++     av_refstruct_unref(&pic->output_buffer_ref);
++@@ -871,6 +881,8 @@
++ 
++     av_freep(&priv->codec_picture_params);
++     av_freep(&priv->roi);
+++    av_freep(&priv->dovi_rpu);
+++    priv->dovi_rpu_size = 0;
++ 
++     return 0;
++ }
++Index: FFmpeg/libavcodec/vaapi_encode_h265.c
++===================================================================
++--- FFmpeg.orig/libavcodec/vaapi_encode_h265.c
+++++ FFmpeg/libavcodec/vaapi_encode_h265.c
++@@ -32,6 +32,7 @@
++ #include "avcodec.h"
++ #include "cbs.h"
++ #include "cbs_h265.h"
+++#include "dovi_rpu.h"
++ #include "hw_base_encode_h265.h"
++ #include "codec_internal.h"
++ #include "h2645data.h"
++@@ -41,6 +42,12 @@
++ #include "hevc/hevc.h"
++ 
++ enum {
+++    DV_L5_KEEP  = 0,
+++    DV_L5_ZERO  = 1,
+++    DV_L5_SCALE = 2,
+++};
+++
+++enum {
++     SEI_MASTERING_DISPLAY       = 0x08,
++     SEI_CONTENT_LIGHT_LEVEL     = 0x10,
++     SEI_A53_CC                  = 0x20,
++@@ -92,6 +99,13 @@
++     CodedBitstreamFragment current_access_unit;
++     int aud_needed;
++     int sei_needed;
+++
+++    // Dolby Vision RPU passthrough.
+++    DOVIContext dovi;
+++    int dv_l5;
+++    /* Written as a pair by AV_OPT_TYPE_IMAGE_SIZE; must stay adjacent. */
+++    int dv_l5_canvas_w;
+++    int dv_l5_canvas_h;
++ } VAAPIEncodeH265Context;
++ 
++ 
++@@ -475,6 +489,87 @@
++     return 0;
++ }
++ 
+++static unsigned vaapi_encode_h265_dv_l5_rescale(unsigned offset, int num, int den)
+++{
+++    uint64_t v;
+++
+++    if (!offset || num == den)
+++        return offset;
+++
+++    v = ((uint64_t)offset * num + den / 2) / den;
+++    /* The L5 offsets are written as 13-bit fields. */
+++    return v > 8191 ? 8191 : (unsigned)v;
+++}
+++
+++/*
+++ * Level 5 states the active picture area as four pixel offsets from the frame
+++ * edges, so that the display excludes letterbox bars from its analysis. The
+++ * offsets are absolute pixels and mean nothing once the frame has been
+++ * resized, and ff_dovi_rpu_generate() writes them through verbatim -- it has
+++ * no idea what resolution it is encoding at. Fix them up here.
+++ *
+++ * On success *out holds either a writable copy of the metadata with L5
+++ * adjusted, or NULL when nothing needed changing and the caller should use
+++ * the original. AVDOVIMetadata is a flat buffer addressed by internal byte
+++ * offsets, so copying the side data verbatim keeps every accessor valid.
+++ */
+++static int vaapi_encode_h265_dovi_fixup_l5(AVCodecContext *avctx,
+++                                           const AVFrameSideData *sd,
+++                                           AVDOVIMetadata **out)
+++{
+++    VAAPIEncodeH265Context *priv = avctx->priv_data;
+++    const AVDOVIMetadata    *src = (const AVDOVIMetadata *)sd->data;
+++    AVDOVIMetadata          *dst;
+++    int found = 0;
+++
+++    *out = NULL;
+++
+++    if (priv->dv_l5 == DV_L5_KEEP)
+++        return 0;
+++
+++    for (int i = 0; i < src->num_ext_blocks; i++) {
+++        if (av_dovi_get_ext(src, i)->level == 5) {
+++            found = 1;
+++            break;
+++        }
+++    }
+++    if (!found)
+++        return 0;
+++
+++    dst = av_memdup(sd->data, sd->size);
+++    if (!dst)
+++        return AVERROR(ENOMEM);
+++
+++    for (int i = 0; i < dst->num_ext_blocks; i++) {
+++        AVDOVIDmData *dm = av_dovi_get_ext(dst, i);
+++        if (dm->level != 5)
+++            continue;
+++
+++        if (priv->dv_l5 == DV_L5_ZERO) {
+++            dm->l5.left_offset   = 0;
+++            dm->l5.right_offset  = 0;
+++            dm->l5.top_offset    = 0;
+++            dm->l5.bottom_offset = 0;
+++        } else {
+++            dm->l5.left_offset =
+++                vaapi_encode_h265_dv_l5_rescale(dm->l5.left_offset,
+++                                                avctx->width, priv->dv_l5_canvas_w);
+++            dm->l5.right_offset =
+++                vaapi_encode_h265_dv_l5_rescale(dm->l5.right_offset,
+++                                                avctx->width, priv->dv_l5_canvas_w);
+++            dm->l5.top_offset =
+++                vaapi_encode_h265_dv_l5_rescale(dm->l5.top_offset,
+++                                                avctx->height, priv->dv_l5_canvas_h);
+++            dm->l5.bottom_offset =
+++                vaapi_encode_h265_dv_l5_rescale(dm->l5.bottom_offset,
+++                                                avctx->height, priv->dv_l5_canvas_h);
+++        }
+++    }
+++
+++    *out = dst;
+++    return 0;
+++}
+++
++ static int vaapi_encode_h265_init_picture_params(AVCodecContext *avctx,
++                                                  FFHWBaseEncodePicture *pic)
++ {
++@@ -688,6 +783,46 @@
++         av_assert0(0 && "invalid picture type");
++     }
++ 
+++    if (priv->dovi.cfg.dv_profile) {
+++        const AVFrameSideData *sd =
+++            av_frame_get_side_data(pic->input_image, AV_FRAME_DATA_DOVI_METADATA);
+++        AVDOVIMetadata *l5_copy = NULL;
+++        const AVDOVIMetadata *metadata;
+++        uint8_t *rpu = NULL;
+++        int rpu_size = 0, err;
+++
+++        if (!sd) {
+++            av_log(avctx, AV_LOG_ERROR, "Dolby Vision enabled, but received "
+++                   "frame without AV_FRAME_DATA_DOVI_METADATA.\n");
+++            return AVERROR_INVALIDDATA;
+++        }
+++
+++        err = vaapi_encode_h265_dovi_fixup_l5(avctx, sd, &l5_copy);
+++        if (err < 0)
+++            return err;
+++        metadata = l5_copy ? l5_copy : (const AVDOVIMetadata *)sd->data;
+++
+++        err = ff_dovi_rpu_generate(&priv->dovi, metadata, FF_DOVI_WRAP_NAL,
+++                                   &rpu, &rpu_size);
+++        av_free(l5_copy);
+++        if (err < 0)
+++            return err;
+++
+++        /* ff_dovi_rpu_generate() returns the emulation-prevented payload
+++         * only; prepend the start code and the HEVC NAL unit header for
+++         * nal_unit_type 62 (UNSPEC62), nuh_layer_id 0, temporal id 0. */
+++        av_freep(&vaapi_pic->dovi_rpu);
+++        vaapi_pic->dovi_rpu = av_malloc(rpu_size + 6);
+++        if (!vaapi_pic->dovi_rpu) {
+++            av_free(rpu);
+++            return AVERROR(ENOMEM);
+++        }
+++        memcpy(vaapi_pic->dovi_rpu, (const uint8_t[]){ 0, 0, 0, 1, 0x7c, 0x01 }, 6);
+++        memcpy(vaapi_pic->dovi_rpu + 6, rpu, rpu_size);
+++        vaapi_pic->dovi_rpu_size = rpu_size + 6;
+++        av_free(rpu);
+++    }
+++
++     return 0;
++ }
++ 
++@@ -980,6 +1115,85 @@
++     return 0;
++ }
++ 
+++static av_cold int vaapi_encode_h265_configure_dovi(AVCodecContext *avctx)
+++{
+++    FFHWBaseEncodeContext    *base_ctx = avctx->priv_data;
+++    VAAPIEncodeH265Context       *priv = avctx->priv_data;
+++    const AVDOVIMetadata     *metadata = NULL;
+++    const AVPixFmtDescriptor     *desc;
+++    const AVFrameSideData          *sd;
+++    AVCodecParameters par = { 0 };
+++    enum AVPixelFormat sw_format;
+++    int err;
+++
+++    if (priv->dv_l5 == DV_L5_SCALE &&
+++        (priv->dv_l5_canvas_w <= 0 || priv->dv_l5_canvas_h <= 0)) {
+++        av_log(avctx, AV_LOG_ERROR, "dv_l5=scale requires dv_l5_canvas to be "
+++               "set to the frame size the source Dolby Vision L5 offsets refer "
+++               "to, e.g. -dv_l5_canvas 3840x2160.\n");
+++        return AVERROR(EINVAL);
+++    }
+++
+++    priv->dovi.logctx = avctx;
+++
+++    if (!priv->dovi.enable)
+++        return 0;
+++
+++    sd = av_frame_side_data_get(avctx->decoded_side_data,
+++                                avctx->nb_decoded_side_data,
+++                                AV_FRAME_DATA_DOVI_METADATA);
+++    if (sd)
+++        metadata = (const AVDOVIMetadata *)sd->data;
+++
+++    /* ff_dovi_configure() reads avctx->pix_fmt, which here is AV_PIX_FMT_VAAPI
+++     * and says nothing about the coded samples, so the profile check would
+++     * reject every stream. Pass the coded format explicitly instead: the
+++     * hardware frames' sw_format, normalised to the planar spelling that check
+++     * expects (VAAPI 10-bit 4:2:0 is P010, the same sample format as
+++     * YUV420P10). Anything that is not 10-bit 4:2:0 is left alone and will
+++     * correctly end up with no Dolby Vision profile. */
+++    sw_format = base_ctx->input_frames ? base_ctx->input_frames->sw_format
+++                                       : avctx->pix_fmt;
+++    desc = av_pix_fmt_desc_get(sw_format);
+++    if (desc && !(desc->flags & (AV_PIX_FMT_FLAG_RGB | AV_PIX_FMT_FLAG_PAL)) &&
+++        desc->nb_components >= 3 && desc->comp[0].depth == 10 &&
+++        desc->log2_chroma_w == 1 && desc->log2_chroma_h == 1)
+++        sw_format = AV_PIX_FMT_YUV420P10;
+++
+++    par.codec_id           = avctx->codec_id;
+++    par.width              = avctx->width;
+++    par.height             = avctx->height;
+++    par.framerate          = avctx->framerate;
+++    par.format             = sw_format;
+++    par.color_space        = avctx->colorspace;
+++    par.color_primaries    = avctx->color_primaries;
+++    par.color_trc          = avctx->color_trc;
+++    par.coded_side_data    = avctx->coded_side_data;
+++    par.nb_coded_side_data = avctx->nb_coded_side_data;
+++
+++    /* Attaches the DV configuration record to coded_side_data, so that the
+++     * muxers write dvcC/dvvC and the Matroska BlockAdditionMapping. */
+++    err = ff_dovi_configure_from_codedpar(&priv->dovi, &par, metadata,
+++                                          AV_DOVI_COMPRESSION_NONE,
+++                                          avctx->strict_std_compliance);
+++
+++    avctx->coded_side_data    = par.coded_side_data;
+++    avctx->nb_coded_side_data = par.nb_coded_side_data;
+++
+++    if (err < 0)
+++        return err;
+++
+++    if (priv->dovi.cfg.dv_profile)
+++        av_log(avctx, AV_LOG_VERBOSE, "Dolby Vision profile %d.%d enabled.\n",
+++               priv->dovi.cfg.dv_profile,
+++               priv->dovi.cfg.dv_bl_signal_compatibility_id);
+++    else if (priv->dovi.enable > 0)
+++        av_log(avctx, AV_LOG_WARNING, "Dolby Vision requested but not enabled; "
+++               "it needs a 10-bit 4:2:0 HDR10-tagged stream.\n");
+++
+++    return 0;
+++}
+++
++ static av_cold int vaapi_encode_h265_configure(AVCodecContext *avctx)
++ {
++     VAAPIEncodeContext      *ctx = avctx->priv_data;
++@@ -1022,6 +1236,10 @@
++ 
++     ctx->roi_quant_range = 51 + 6 * (ctx->profile->depth - 8);
++ 
+++    err = vaapi_encode_h265_configure_dovi(avctx);
+++    if (err < 0)
+++        return err;
+++
++     return 0;
++ }
++ 
++@@ -1113,6 +1331,7 @@
++     ff_cbs_fragment_free(&priv->current_access_unit);
++     ff_cbs_close(&priv->cbc);
++     av_freep(&priv->sei_a53cc_data);
+++    ff_dovi_ctx_unref(&priv->dovi);
++ 
++     return ff_vaapi_encode_close(avctx);
++ }
++@@ -1130,6 +1349,26 @@
++     { "aud", "Include AUD",
++       OFFSET(aud), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
++ 
+++    { "dolbyvision", "Enable Dolby Vision RPU coding",
+++      OFFSET(dovi.enable), AV_OPT_TYPE_BOOL, { .i64 = FF_DOVI_AUTOMATIC },
+++      -1, 1, FLAGS, .unit = "dovi" },
+++    {   "auto", NULL, 0, AV_OPT_TYPE_CONST,
+++      { .i64 = FF_DOVI_AUTOMATIC }, .flags = FLAGS, .unit = "dovi" },
+++
+++    { "dv_l5", "Dolby Vision L5 (active area) handling",
+++      OFFSET(dv_l5), AV_OPT_TYPE_INT, { .i64 = DV_L5_KEEP },
+++      DV_L5_KEEP, DV_L5_SCALE, FLAGS, .unit = "dv_l5" },
+++    {   "keep",  "Pass the source offsets through unchanged",
+++      0, AV_OPT_TYPE_CONST, { .i64 = DV_L5_KEEP },  .flags = FLAGS, .unit = "dv_l5" },
+++    {   "zero",  "Clear the offsets, for when the bars have been cropped away",
+++      0, AV_OPT_TYPE_CONST, { .i64 = DV_L5_ZERO },  .flags = FLAGS, .unit = "dv_l5" },
+++    {   "scale", "Rescale the offsets from dv_l5_canvas to the output size",
+++      0, AV_OPT_TYPE_CONST, { .i64 = DV_L5_SCALE }, .flags = FLAGS, .unit = "dv_l5" },
+++
+++    { "dv_l5_canvas", "Frame size the source Dolby Vision L5 offsets refer to "
+++      "(required by dv_l5=scale)",
+++      OFFSET(dv_l5_canvas_w), AV_OPT_TYPE_IMAGE_SIZE, { .str = NULL }, 0, 0, FLAGS },
+++
++     { "profile", "Set profile (general_profile_idc)",
++       OFFSET(profile), AV_OPT_TYPE_INT,
++       { .i64 = AV_PROFILE_UNKNOWN }, AV_PROFILE_UNKNOWN, 0xff, FLAGS, .unit = "profile" },
++Index: FFmpeg/libavformat/dovi_isom.c
++===================================================================
++--- FFmpeg.orig/libavformat/dovi_isom.c
+++++ FFmpeg/libavformat/dovi_isom.c
++@@ -27,6 +27,7 @@
++ #include "libavcodec/put_bits.h"
++ 
++ #include "avformat.h"
+++#include "libavutil/pixfmt.h"
++ #include "dovi_isom.h"
++ 
++ int ff_isom_parse_dvcc_dvvc(void *logctx, AVStream *st,
++@@ -125,6 +126,22 @@
++            dovi->dv_md_compression);
++ }
++ 
+++/* Hardware encoders report the semi-planar spelling of the coded format
+++ * (VAAPI/QSV/NVENC 10-bit 4:2:0 is P010, 8-bit is NV12), which describes the
+++ * same samples as the planar spelling the Dolby Vision profiles require. Treat
+++ * them as equivalent so that hardware-encoded streams are not silently denied
+++ * their configuration record. */
+++static int dovi_format_is(int format, int planar)
+++{
+++    if (format == planar)
+++        return 1;
+++    if (planar == AV_PIX_FMT_YUV420P10 && format == AV_PIX_FMT_P010)
+++        return 1;
+++    if (planar == AV_PIX_FMT_YUV420P && format == AV_PIX_FMT_NV12)
+++        return 1;
+++    return 0;
+++}
+++
++ int ff_isom_validate_dovi_config(const AVDOVIDecoderConfigurationRecord *dovi,
++                                  const AVCodecParameters *codec_par, int codec_tag)
++ {
++@@ -156,7 +173,7 @@
++     case 0:
++         // Although the IPT-PQ-C2 Dolby Vision uses is always full range, some videos tag that wrong in the container
++         // To allow stream copy for such videos, don't check for the color range
++-        if (codec_par->format != AV_PIX_FMT_YUV420P10 ||
+++        if (!dovi_format_is(codec_par->format, AV_PIX_FMT_YUV420P10) ||
++             (codec_tag && !(codec_tag == MKTAG('d', 'v', 'h', '1') ||
++                             codec_tag == MKTAG('d', 'v', 'h', 'e') ||
++                             codec_tag == MKTAG('d', 'a', 'v', '1')))) {
++@@ -169,14 +186,14 @@
++             codec_par->color_primaries != AVCOL_PRI_BT2020 ||
++             codec_par->color_space != AVCOL_SPC_BT2020_NCL ||
++             codec_par->color_range != AVCOL_RANGE_MPEG ||
++-            codec_par->format != AV_PIX_FMT_YUV420P10) {
+++            !dovi_format_is(codec_par->format, AV_PIX_FMT_YUV420P10)) {
++             return AVERROR(EINVAL);
++         }
++         break;
++     case 2: // SDR
++         // Don't check range or color info for SDR base layer as a lot of them will set to unspecified
++         // And a lot of players assumes unspecified as BT709 in tv range
++-        if (codec_par->format != AV_PIX_FMT_YUV420P)
+++        if (!dovi_format_is(codec_par->format, AV_PIX_FMT_YUV420P))
++             return AVERROR(EINVAL);
++         break;
++     case 4: // HLG
++@@ -184,7 +201,7 @@
++             codec_par->color_primaries != AVCOL_PRI_BT2020 ||
++             codec_par->color_space != AVCOL_SPC_BT2020_NCL ||
++             codec_par->color_range != AVCOL_RANGE_MPEG ||
++-            codec_par->format != AV_PIX_FMT_YUV420P10) {
+++            !dovi_format_is(codec_par->format, AV_PIX_FMT_YUV420P10)) {
++             return AVERROR(EINVAL);
++         }
++         break;
+diff --git a/debian/patches/series b/debian/patches/series
+--- a/debian/patches/series
++++ b/debian/patches/series
+@@ -96,3 +96,4 @@
+ 0096-fix-full-range-input-for-mjpeg-vaapi-encoder.patch
+ 0097-add-misc-enhancements-to-mfenc-hw-encoder.patch
+ 0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
++0099-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch
