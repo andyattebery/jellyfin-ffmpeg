@@ -2,48 +2,41 @@ diff --git a/debian/patches/0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-form
 new file mode 100644
 --- /dev/null
 +++ b/debian/patches/0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,52 @@
 +Allow VAAPI to import the ALPHA spellings of the 10-bit RGB DRM formats.
 +
 +Vulkan exports a single-plane 10-bit RGB image as DRM_FORMAT_ARGB2101010 or
 +DRM_FORMAT_ABGR2101010, never the X variants: hwcontext_vulkan.c's
-+vkfmt_to_drmfmt() returns the first match in vulkan_drm_format_map, and that
-+table lists the alpha spellings first --
-+
-+    { DRM_FORMAT_ARGB2101010, VK_FORMAT_A2B10G10R10_UNORM_PACK32 },
-+    { DRM_FORMAT_ABGR2101010, VK_FORMAT_A2R10G10B10_UNORM_PACK32 },
-+    { DRM_FORMAT_XRGB2101010, VK_FORMAT_A2B10G10R10_UNORM_PACK32 },
-+    { DRM_FORMAT_XBGR2101010, VK_FORMAT_A2R10G10B10_UNORM_PACK32 },
-+
-+-- while vaapi_drm_format_map carries only the X spellings, patch 0038 having
-+added X2B10G10R10 alongside upstream's X2R10G10B10. So mapping a Vulkan
-+x2rgb10/x2bgr10 frame to VAAPI fails:
++vkfmt_to_drmfmt() returns the first match in vulkan_drm_format_map and the alpha
++spellings are listed first. vaapi_drm_format_map carries only the X spellings,
++so mapping a Vulkan x2rgb10/x2bgr10 frame to VAAPI fails:
 +
 +    [AVHWFramesContext] DRM format not supported by VAAPI.
 +    [Parsed_hwmap] Failed to map frame: -22.
 +
-+X and A differ only in whether the top two bits are meaningful; the memory
-+layout is identical, and the driver accepts the surface either way -- verified
-+on Mesa 26.0.4 / RX 9070 XT (gfx1201) before writing this:
++X and A differ only in whether the top two bits are meaningful; the layout is
++identical and the driver takes the surface either way.
 +
-+    -vf format=x2rgb10,hwupload,scale_vaapi=format=p010    rc=0
++THE PAIRING IS CROSSED. The DRM and Vulkan tables are channel-inverted by
++convention -- DRM fourccs are little-endian packed while Vulkan PACK32 names
++read MSB-first -- so DRM_FORMAT_ARGB2101010 carries the Vulkan A2B10G10R10
++layout. Measured by logging desc->layers[0].format in vaapi_map_from_drm():
 +
-+Each alpha fourcc is mapped to the X fourcc of the SAME channel order, matching
-+the pairing 0038 already established.
++    libplacebo format=x2rgb10  ->  DRM fourcc AB30 (ABGR2101010)
++    libplacebo format=x2bgr10  ->  DRM fourcc AR30 (ARGB2101010)
 +
-+Why it matters: it is the last thing between a VAAPI -> Vulkan -> VAAPI
-+tonemapping chain and 10-bit output at full speed. On that hardware a MULTIPLANE
-+Vulkan target (nv12, p010) costs ~2x -- measured 9.98 s against 19.46 s at equal
-+bit depth, and the penalty follows the multiplane frame rather than the filter
-+writing it -- so the fast chain must keep the Vulkan side single-plane. Today
-+that forces 8-bit bgra and lets VAAPI's VPP widen to p010, which delivers the
-+speed but only 8-bit precision. A single-plane 10-bit RGB target would keep both,
-+and this is what blocks it.
++so each alpha fourcc maps to the VA fourcc of the OPPOSITE channel order. The
++same-order pairing transposes R and B, and does it silently: a valid file at
++full speed with the chroma destroyed. Per-channel PSNR against the 8-bit bgra
++chain was y 29.12 / u 16.08 / v 17.22 crossed-wrong, y 51.53 / u 48.12 /
++v 48.23 correct.
 +
-+NOT addressed here: VA also advertises the alpha surface fourccs themselves
-+(A2R10G10B10 / A2B10G10R10 show as "unknown" in vaapi_format_map). Naming them
-+would need an alpha 10-bit RGB AVPixelFormat, which ffmpeg does not have, and
-+nothing needs it -- the X mappings carry the same bytes.
++Order matters: the X entries stay AHEAD of these, because vaapi_map_to_drm()
++takes the first va_fourcc match and the export direction must keep emitting the
++X spellings. Do not reorder them.
++
++Full rationale, measurements and the diagnosis method:
++docs/patches/0003-vaapi-alpha-10bit-rgb.md in the build-recipe repo.
 +
 +Index: FFmpeg/libavutil/hwcontext_vaapi.c
 +===================================================================
@@ -53,11 +46,11 @@ new file mode 100644
 + #if defined(VA_FOURCC_X2B10G10R10) && defined(DRM_FORMAT_XBGR2101010)
 +     DRM_MAP(X2B10G10R10, 1, DRM_FORMAT_XBGR2101010),
 + #endif
-++#if defined(VA_FOURCC_X2R10G10B10) && defined(DRM_FORMAT_ARGB2101010)
-++    DRM_MAP(X2R10G10B10, 1, DRM_FORMAT_ARGB2101010),
+++#if defined(VA_FOURCC_X2R10G10B10) && defined(DRM_FORMAT_ABGR2101010)
+++    DRM_MAP(X2R10G10B10, 1, DRM_FORMAT_ABGR2101010),
 ++#endif
-++#if defined(VA_FOURCC_X2B10G10R10) && defined(DRM_FORMAT_ABGR2101010)
-++    DRM_MAP(X2B10G10R10, 1, DRM_FORMAT_ABGR2101010),
+++#if defined(VA_FOURCC_X2B10G10R10) && defined(DRM_FORMAT_ARGB2101010)
+++    DRM_MAP(X2B10G10R10, 1, DRM_FORMAT_ARGB2101010),
 ++#endif
 + };
 + #undef DRM_MAP
