@@ -1,0 +1,13 @@
+# 0002 — the same n13.0.19.1 pin, in msys2/PKGBUILD/50-mingw-w64-ffnvcodec-headers/PKGBUILD.
+#
+# WINDOWS ONLY. msys2/ produces win64 and winarm64 and build.sh:17 / buildarm64.sh:17 share the
+# PKGBUILD directory, so one declaration covers both.
+#
+# The four options are deliberately identical to 0001's. See that file for why they are not merged.
+# If you got here by copying 0001, the platform column is the field you must change — the
+# duplicate-tuple lint in verify-binary.sh exists because that is the exact edit people forget.
+
+encoder-option  windows  hevc_nvenc  uhq
+encoder-option  windows  hevc_nvenc  tf_level
+encoder-option  windows  hevc_nvenc  lookahead_level
+encoder-option  windows  hevc_nvenc  split_encode_mode

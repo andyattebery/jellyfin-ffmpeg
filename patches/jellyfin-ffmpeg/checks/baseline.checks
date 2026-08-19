@@ -1,0 +1,13 @@
+# Not owned by any patch in this repo. `baseline` is the one filename in this directory exempt
+# from the patch-pairing rule, and it is whitelisted by name so a typo like `0004x.checks` cannot
+# quietly exempt itself the same way.
+#
+# tonemap_cuda comes from jellyfin's OWN debian/patches series (0004-add-cuda-tonemap-impl.patch,
+# unrelated to this repo's 0004). It is the control: this fork exists to have tonemap_cuda AND
+# -tune uhq in one binary, so if the filter vanishes the series stopped applying or the build lost
+# CUDA, and the premise is gone whatever the pin patches did.
+#
+# It is also what keeps at least one assertion running on every platform, so the vacuous-pass
+# guard in verify-binary.sh stays meaningful rather than being satisfied by the pin checks alone.
+
+filter  all      tonemap_cuda

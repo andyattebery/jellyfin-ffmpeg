@@ -59,6 +59,17 @@ jobs:
       - name: Self-test
         run: ./.github/scripts/resolve-upstream.sh --self-test
 
+      # The patch/checks pairing gate is a property of the REPO, not of a binary, so it must fail
+      # in the first minute rather than 2.5 hours in — and it must fail in dry_run and smoke too,
+      # where the four verify steps are skipped for want of a binary. Also runs the stub-binary
+      # end-to-end assertions, so the green path is exercised on every run and not only when a
+      # real build happens to produce a good binary.
+      #
+      # checks.yaml runs this same command on push and pull_request. This copy is the backstop
+      # for anything that reaches main without one.
+      - name: Verification manifest self-test
+        run: ./.github/scripts/verify-binary.sh --self-test
+
       # Normalise once, so every downstream `if:` compares the same way whether the trigger was
       # schedule (inputs absent) or workflow_dispatch.
       - name: Resolve run mode
@@ -143,6 +154,10 @@ jobs:
       # a runner with no GPU. This is the only check that actually proves the build did what
       # the fork exists to do — a win64 asset missing every one of these was published because
       # nothing here looked past the plumbing.
+      #
+      # WHAT it checks is not written here or in the script: each patch declares its own checks
+      # in patches/jellyfin-ffmpeg/checks/NNNN.checks. Adding a patch requires adding one, which
+      # is why this step never changes when the patch set does.
       - name: Verify the binary carries the features
         if: needs.resolve.outputs.mode == 'full'
         run: |

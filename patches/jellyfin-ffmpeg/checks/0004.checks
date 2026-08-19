@@ -1,0 +1,23 @@
+# 0004 — Dolby Vision RPU passthrough for the hevc_vaapi encoder.
+#
+# LINUX ONLY, and the reason is not the patch — it is the pipeline. VAAPI is linux-only here:
+# builder/scripts.d/50-vaapi/50-libva.sh:7 returns -1 for any non-linux target and only echoes
+# --enable-vaapi when $TARGET == linux*, and msys2/PKGBUILD/ contains no libva package at all.
+# So hevc_vaapi does not exist in either windows build.
+#
+# These therefore print `skip` on the two windows jobs. Do NOT "fix" that into a failure: release
+# depends on all four build jobs, so an unconditional hevc_vaapi check would block every publish,
+# and it costs a 2.5 hour cycle to discover.
+#
+# Conversely, on linux this is a HARD failure, not a skip. verify-binary.sh asks whether the
+# binary can describe the encoder at all before it looks at any option, and a missing hevc_vaapi
+# fails the group. It is deliberately not gated on "is hevc_vaapi in -encoders?" — that would
+# degrade a linux build that lost VAAPI into a silent skip, which is the exact failure this gate
+# exists to catch.
+#
+# The patch is unverified on hardware. What these three assertions prove is registration: the
+# options exist in the encoder's static AVOption table, so the patch applied and compiled in.
+
+encoder-option  linux    hevc_vaapi  dolbyvision
+encoder-option  linux    hevc_vaapi  dv_l5
+encoder-option  linux    hevc_vaapi  dv_l5_canvas

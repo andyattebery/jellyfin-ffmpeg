@@ -1,0 +1,12 @@
+# 0003 — VAAPI import of the alpha 10-bit RGB DRM formats.
+#
+# Not gateable, and this file is the declaration of that rather than an absence someone has to
+# notice. The patch adds two entries to vaapi_drm_format_map in libavutil/hwcontext_vaapi.c; a
+# format-table entry is not an AVOption and not a filter, so it appears in neither of the two
+# things this gate can read. Proving it needs a real hwmap on AMD hardware, which a GPU-less
+# runner does not have.
+#
+# Do not "fix" this by inventing a proxy check. A check that passes on a build without the patch
+# is worse than no check: it converts an honest gap into a false claim of coverage.
+
+ungateable  all  a vaapi_drm_format_map entry appears in neither -h encoder= nor -filters; proving it needs a real hwmap on AMD hardware, which a GPU-less runner does not have

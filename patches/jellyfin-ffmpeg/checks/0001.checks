@@ -1,0 +1,15 @@
+# 0001 — bump nv-codec-headers to n13.0.19.1 in builder/scripts.d/50-ffnvcodec.sh.
+#
+# LINUX ONLY, and that is not a platform detail — it is which build system the patch attaches to.
+# builder/ produces linux64 and linuxarm64, so one declaration covers both; build.sh:27 sources
+# scripts.d/ whatever $TARGET is.
+#
+# 0002 declares the IDENTICAL four options for windows, because msys2/ pins the same headers in a
+# different file. Do NOT collapse the two files into one `all` — the whole reason this fork has a
+# gate is that patching one build system and not the other shipped a win64 asset with NVENC and
+# none of these options, and nothing noticed. Two independent pins, two independent declarations.
+
+encoder-option  linux    hevc_nvenc  uhq
+encoder-option  linux    hevc_nvenc  tf_level
+encoder-option  linux    hevc_nvenc  lookahead_level
+encoder-option  linux    hevc_nvenc  split_encode_mode

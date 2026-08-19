@@ -3,3 +3,9 @@
 # "ci: use .gitattributes instead" commits on _meta_win_clang_portable.yaml).
 *.patch -text
 *.sh    text eol=lf
+
+# Same class of bug, one step removed: verify-binary.sh reads patches/jellyfin-ffmpeg/checks/*.checks
+# field by field, and a CRLF checkout leaves the CR on the LAST field of every line -- turning
+# `dolbyvision` into a pattern that can never match. That would fail only the two windows jobs, and
+# only after a 2.5 hour build. The parser also strips CR; this is the other lock on the same door.
+*.checks text eol=lf

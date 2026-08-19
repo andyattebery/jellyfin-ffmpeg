@@ -1,0 +1,52 @@
+# The cheap gate. Everything here runs without a compile, a GPU or a network call, so a mistake
+# in the patch declarations costs 20 seconds instead of the 2.5 hours a full build-release run
+# takes. build-release.yaml is scheduled and manual, so without this workflow an undeclared patch
+# would sit on main until the next upstream release.
+#
+# It deliberately does NOT build anything. Its whole job is to answer two questions:
+#   - is every patch in patches/jellyfin-ffmpeg/ declared in checks/, and vice versa?
+#   - do both scripts still behave the way their own assertions say they do?
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    name: 'Script self-tests'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      # Includes the patch/checks pairing gate and the end-to-end stub-binary run, so the green
+      # path is exercised here rather than only by a real 2.5h build.
+      - name: verify-binary self-test
+        run: ./.github/scripts/verify-binary.sh --self-test
+
+      - name: Show what each platform would check
+        run: ./.github/scripts/verify-binary.sh --list
+
+      - name: resolve-upstream self-test
+        run: ./.github/scripts/resolve-upstream.sh --self-test
+
+      # bash 3.2 is what macOS ships and what the README tells people to hand-run this on. The
+      # runners have bash 5, so a bashism would pass here and fail on a maintainer's laptop.
+      - name: Reject bashisms the macOS bash cannot run
+        run: |
+          set -euo pipefail
+          for f in .github/scripts/*.sh; do
+            bash -n "$f"
+            grep -nE 'declare -A|readarray|mapfile|\$\{[A-Za-z_]+\^\^|\$\{[A-Za-z_]+,,' "$f" \
+              && { echo "::error::$f uses a bash 4+ construct"; exit 1; } || true
+          done
+          echo "  ok    no bash 4+ constructs"
+
+      - name: shellcheck
+        run: shellcheck .github/scripts/*.sh

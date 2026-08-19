@@ -14,9 +14,13 @@ jellyfin-ffmpeg's own `builder/` directory is derived from.
 
 **Two kinds of patch live here, and they behave differently.** `0001`/`0002` patch *build systems*
 — they move a dependency pin, and each covers only the targets its build system produces.
-`0003` patches the *ffmpeg source*, by adding to jellyfin-ffmpeg's own `debian/patches/` series;
-every build system applies that series, so one patch covers everything. Anywhere below that says
-"the patches attach to a build system", read it as being about `0001`/`0002`.
+`0003`/`0004` patch the *ffmpeg source*, by adding to jellyfin-ffmpeg's own `debian/patches/`
+series; every build system applies that series, so one patch covers everything. Anywhere below
+that says "the patches attach to a build system", read it as being about `0001`/`0002`.
+
+**Every patch declares how it is verified**, in `patches/jellyfin-ffmpeg/checks/NNNN.checks`. A
+patch with no declaration fails the gate — including a patch that cannot be proven from a binary,
+which declares itself `ungateable` and says why. See [The verification gate](#the-verification-gate).
 
 ## Why this exists
 
@@ -29,7 +33,8 @@ Two machines need to run the *same* ffmpeg so a transcode job can go to either:
 | **this** | yes | yes |
 
 `tonemap_cuda` comes from `0004-add-cuda-tonemap-impl.patch`, one of 97 patches in
-jellyfin-ffmpeg's `debian/patches/series` (98 with `0003` below), so no vanilla build has it. And jellyfin-ffmpeg pins
+jellyfin-ffmpeg's `debian/patches/series` (99 with `0003` and `0004` below), so no vanilla build
+has it. And jellyfin-ffmpeg pins
 nv-codec-headers at `n12.0.16.1`, which predates `NVENC_HAVE_UHQ_TUNING`. One binary needs both,
 and nobody publishes it.
 
@@ -52,9 +57,9 @@ Upstream produces **18 artifacts**. This repo builds **4**.
 
 `0001`/`0002` attach to a *build system*, not to a target, which is why the arm64 pair was nearly
 free — the same two patches cover all four portable targets, and all four run in parallel, so
-adding them changed nothing about wall clock. (`0003` is not in this table's logic at all: it goes
-into the ffmpeg patch series, so it applies to every target every build system produces, including
-the `.deb` and mac builds this repo does not make.)
+adding them changed nothing about wall clock. (`0003` and `0004` are not in this table's logic at
+all: they go into the ffmpeg patch series, so they apply to every target every build system
+produces, including the `.deb` and mac builds this repo does not make.)
 
 | artifact | built here | covered by |
 |---|---|---|
@@ -120,18 +125,66 @@ all. **`verify-binary.sh` cannot cover this** — it reads `-h encoder=` and `-f
 table entry appears in neither. Proving it needs a `hwmap` on AMD hardware, which a GPU-less runner
 does not have, so `0003` is outside the gate by construction rather than by omission.
 
+That is no longer only a claim in a README. `patches/jellyfin-ffmpeg/checks/0003.checks` declares
+it, in the reason field of an `ungateable` directive, and the gate prints it as `n/a` on every run
+of every target. The declaration is mandatory: delete the file and the gate fails.
+
+## Patch 0004 — Dolby Vision RPU passthrough for hevc_vaapi
+
+**Carried, applying cleanly, and NOT verified on hardware.** Like `0003`, read it as a change in
+flight. Unlike `0003`, it *is* gateable, and it is gated.
+
+`hevc_vaapi` drops Dolby Vision on transcode. FFmpeg has all the machinery — the HEVC decoder
+parses the RPU and attaches `AV_FRAME_DATA_DOVI_METADATA` to every frame, and `dovi_rpuenc.c` can
+synthesise it back out — but only `libx265`, `libsvtav1` and `libaomenc` are wired to it. No VAAPI,
+Vulkan or AMF encoder calls `ff_dovi_configure()`, so on AMD Linux there is no single-pass way to
+keep DV through a hardware encode: today's answer is to encode the base layer and re-inject the RPU
+afterwards with `dovi_tool`. That matters more now that AMD has dropped AMF from the Linux driver
+and pointed users at VA-API, which takes rigaya's VCEEncC — the one tool that did this in one pass
+— off the table.
+
+The patch wires `hevc_vaapi` to the existing DOVI code, following `libx265.c`, and adds three
+AVOptions:
+
+| option | type | default | what it does |
+|---|---|---|---|
+| `dolbyvision` | boolean tri-state | `auto` | emit the RPU and the DV configuration record |
+| `dv_l5` | `keep` / `zero` / `scale` | `keep` | how to handle the level 5 (active area) metadata |
+| `dv_l5_canvas` | image_size | unset | canvas size `dv_l5=scale` scales against |
+
+It covers DV profiles 8 and 5 and rejects profile 7. It also fixes a silent failure in jellyfin's
+own patch `0027`, whose `ff_isom_validate_dovi_config()` required `AV_PIX_FMT_YUV420P10` and so
+rejected every hardware-encoded stream — they report `P010` — quietly dropping the Matroska
+`BlockAdditionMapping`.
+
+**What is not proven.** That a real DV transcode survives end to end on hardware. The gate proves
+*registration*: the three options are in the encoder's static AVOption table, so the patch applied
+and compiled in. It cannot prove the RPU is correct, because that needs a GPU, a driver and a
+video file, and the runners have none.
+
+**Linux only, and that is a property of this pipeline rather than of the patch.** VAAPI is
+linux-only here: `builder/scripts.d/50-vaapi/50-libva.sh:7` returns `-1` for any non-linux target,
+and `msys2/PKGBUILD/` has no libva package at all. So the two windows jobs print `skip` for these
+three checks. An unconditional check would fail both, and `release` needs all four build jobs, so
+it would block every publish — 2.5 hours to discover.
+
 ## Layout
 
 ```
-patches/jellyfin-ffmpeg/          applied in filename order with `git apply`
+patches/jellyfin-ffmpeg/          *.patch applied in filename order with `git apply`
   0001  linux   nv-codec-headers pin   builder/scripts.d/50-ffnvcodec.sh      (amd64 + arm64)
   0002  windows nv-codec-headers pin   msys2/PKGBUILD/50-mingw-w64-ffnvcodec-headers
                                                                               (win64 + winarm64)
   0003  all     ffmpeg source          debian/patches/0098-...  + series      (all targets)
-                VAAPI import of the alpha 10-bit RGB DRM formats — see below
-.github/workflows/build-release.yaml   resolve -> build all four -> verify -> publish
+                VAAPI import of the alpha 10-bit RGB DRM formats — see above
+  0004  all     ffmpeg source          debian/patches/0099-...  + series      (all targets)
+                Dolby Vision RPU passthrough for hevc_vaapi — see above
+  checks/                        NOT applied — one .checks file per patch, declaring how that
+                                 patch is verified. Pairing is enforced; see the gate below.
+.github/workflows/build-release.yaml   resolve -> build all four -> verify -> publish (~2.5h)
+.github/workflows/checks.yaml          the cheap gate: script self-tests on push/PR (~20s)
 .github/scripts/resolve-upstream.sh    which upstream release to build; --self-test, --plan
-.github/scripts/verify-binary.sh       the gate: asks ffmpeg whether the build has the features
+.github/scripts/verify-binary.sh       the gate runner; --self-test, --list
 ```
 
 ## How it runs
@@ -161,10 +214,45 @@ Every published binary is checked by `verify-binary.sh` before the release job r
 not carry the features, its job fails and nothing is published — the release keeps its previous
 assets.
 
-It asks ffmpeg rather than grepping the binary: `-h encoder=hevc_nvenc` reads the encoder's
-static AVOption table and `-filters` the compiled-in filter list, neither of which loads the
-NVIDIA driver, so it works on a GPU-less runner. **It must run on the binary's own platform**,
-and that is what decides where it runs:
+It asks ffmpeg rather than grepping the binary: `-h encoder=` reads an encoder's static AVOption
+table and `-filters` the compiled-in filter list, neither of which loads a driver, so it works on
+a GPU-less runner.
+
+**What it checks is not written in the script.** Each patch declares its own checks in
+`patches/jellyfin-ffmpeg/checks/NNNN.checks`, and `verify-binary.sh` is a generic runner over
+those files:
+
+```
+encoder-option  linux    hevc_vaapi  dolbyvision      # 0004.checks
+encoder-option  windows  hevc_nvenc  uhq              # 0002.checks
+filter          all      tonemap_cuda                 # baseline.checks
+ungateable      all      <reason>                     # 0003.checks
+```
+
+**The rule that makes this a gate rather than a convention: every `NNNN-*.patch` must have a
+`checks/NNNN.checks`, and every `checks/NNNN.checks` must have a patch.** Either side missing is
+an error, and it is checked before the script looks at a binary — so a patch cannot ship without
+saying how it is proven. A patch that *cannot* be proven from a binary is not exempt; it declares
+`ungateable` with a reason, which is what `0003` does. `baseline.checks` is the single exempt
+filename, for checks no patch here owns — `tonemap_cuda` comes from jellyfin's own series.
+
+Three verbs, kept distinct on purpose:
+
+| | meaning |
+|---|---|
+| `ok` | the assertion ran, on this binary, and passed |
+| `skip` | declared for the other platform — a sibling job runs it |
+| `n/a` | declared unprovable by any binary, with the reason printed |
+
+`skip` and `n/a` are not merged because that would make "declared for the wrong platform by
+mistake" indistinguishable from "nobody can ever check this". A run where *nothing* ran is a
+failure, not a pass.
+
+`hevc_vaapi`'s three checks are linux-only, because VAAPI is linux-only in this pipeline — see
+[Patch 0004](#patch-0004--dolby-vision-rpu-passthrough-for-hevc_vaapi). They print `skip` on the
+two windows jobs rather than failing them.
+
+**It must run on the binary's own platform**, and that is what decides where it runs:
 
 | target | where it is verified | why |
 |---|---|---|
@@ -180,6 +268,30 @@ difference is ordering — it is checked after upload rather than before.
 This whole section exists because a win64 asset was once published with NVENC but none of the
 tuning options. Every check in the pipeline at the time was about plumbing; nothing looked inside
 the binary.
+
+### Adding a patch
+
+Trigger: a new `patches/jellyfin-ffmpeg/NNNN-*.patch`. Required artifact:
+`patches/jellyfin-ffmpeg/checks/NNNN.checks` with at least one directive. No artifact, no green
+gate — this is enforced, not advised.
+
+1. Write `checks/NNNN.checks`. Pick the platform honestly: `linux`, `windows`, or `all`. A patch
+   to `builder/scripts.d` is `linux`; one to `msys2/PKGBUILD` is `windows`; one that adds to
+   `debian/patches/series` is `all` unless the *feature* is platform-bound, as `0004`'s is.
+2. If it cannot be proven by asking ffmpeg to describe itself, say so:
+   `ungateable  all  <why>`. An empty reason is rejected.
+3. Run `.github/scripts/verify-binary.sh --self-test` and `--list`. One second, no build.
+
+Three kinds exist — `encoder-option <encoder> <option>`, `filter <name>`, `ungateable <reason>` —
+because those are what the current patches need. Adding a kind is five steps documented at the top
+of `verify-binary.sh`; the important one is registering its token, without which a misspelled kind
+would be a silent no-op rather than an error.
+
+The declarations for `0001` and `0002` are deliberately identical except for the platform column.
+That duplication mirrors the two independent header pins, and collapsing it to one `all` row would
+re-create exactly the blind spot that shipped the broken win64 asset. A lint rejects two files
+declaring the *same* tuple, which is the other half of that mistake — copying `0001` to `0002` and
+forgetting to change `linux` to `windows`.
 
 ## The pin lives in three independent build systems
 
@@ -201,8 +313,13 @@ has disabled.) Those scripts are reached via `ENTRYPOINT`, not a call site, so g
 `ffnvcodec >= 12.1.14.0` with no upper bound, which accepts 13.x.
 
 **If .deb builds are ever added here, they need a third pin patch** — otherwise they silently ship
-the old headers. **`0003` is not affected by any of this**: it lives in the ffmpeg patch series that
-every one of these build systems applies, so it needs no per-build-system duplicate.
+the old headers. **`0003` and `0004` are not affected by any of this**: they live in the ffmpeg
+patch series that every one of these build systems applies, so they need no per-build-system
+duplicate.
+
+The verification declarations mirror this split exactly. `0001.checks` says `linux` and
+`0002.checks` says `windows`, with the same four options in each — two independent pins, two
+independent declarations. `0003`/`0004` declare once.
 
 ## Build time
 
@@ -253,13 +370,25 @@ Deployment globs are unambiguous between architectures and `--self-test` pins th
 ## Retiring this
 
 If upstream ever bumps its own pin, `git apply` stops applying and the build fails loudly. That is
-the signal — but it now retires **`0001`/`0002` only**. `0003` is an independent reason to keep a
-recipe here, and it retires on its own condition: upstream jellyfin-ffmpeg (or ffmpeg) accepting the
-alpha 10-bit RGB DRM entries. Check both before deleting anything.
+the signal — but it now retires **`0001`/`0002` only**. Each other patch retires on its own
+condition, so check all three before deleting anything:
 
-`0003` is also the more fragile of the two to an upstream release: its series hunk's context is the
-last three lines of `debian/patches/series`, so a new upstream patch appended there makes `git apply`
-fail rather than misorder — the safe direction, and the same loud-failure signal.
+| patch | retires when |
+|---|---|
+| `0001`/`0002` | upstream bumps its own nv-codec-headers pin |
+| `0003` | upstream jellyfin-ffmpeg (or ffmpeg) accepts the alpha 10-bit RGB DRM entries |
+| `0004` | upstream jellyfin-ffmpeg (or ffmpeg) accepts Dolby Vision for the VAAPI encoder |
+
+Retiring a patch means deleting its `checks/NNNN.checks` too. The pairing gate fails on an orphan
+declaration, so this is loud rather than silent — but it is one more file than people expect.
+
+**`0004` is coupled to `0003`, and the coupling is not obvious.** `0004`'s series hunk uses
+`0096`/`0097`/`0098` as context, and `0098` exists only because `0003` ran first. So retiring
+`0003` breaks `0004`'s `git apply`. Loud, not silent, but worth knowing before you start.
+
+`0003` and `0004` are also the more fragile to an upstream release: their series hunks' context is
+the tail of `debian/patches/series`, so a new upstream patch appended there makes `git apply` fail
+rather than misorder — the safe direction, and the same loud-failure signal.
 
 ## Checking a built binary by hand
 
@@ -268,12 +397,19 @@ same script the pipeline runs, on a machine of that binary's platform:
 
 ```bash
 .github/scripts/verify-binary.sh /path/to/ffmpeg       # exit 0 = has everything
+.github/scripts/verify-binary.sh --list                # what it would check, no binary needed
 ```
+
+**"That binary's platform" means one of the four targets — macOS is not one of them.** The script
+infers linux from any path not ending in `.exe`, so running it against a Homebrew ffmpeg reports
+the `hevc_vaapi` options as missing. That is correct behaviour, not a bug: as a negative control it
+is useful, as a way to check a mac build it is meaningless. Use `--list` on macOS.
 
 Or directly:
 
 ```bash
 ./ffmpeg -h encoder=hevc_nvenc | grep -E 'uhq|tf_level|lookahead_level|split_encode'
+./ffmpeg -h encoder=hevc_vaapi | grep -E 'dolbyvision|dv_l5'   # linux builds only
 ./ffmpeg -filters | grep tonemap_cuda
 ```
 
@@ -293,10 +429,24 @@ strings ffmpeg.exe | grep -cF "NVIDIA NVENC hevc encoder"                       
 ## Testing a change without waiting 2.5 hours
 
 ```bash
+.github/scripts/verify-binary.sh --self-test      # ~1s: the gate's own assertions, the
+                                                  # patch/checks pairing, and an end-to-end run
+                                                  # against stub binaries
+.github/scripts/verify-binary.sh --list           # what each platform would check
 .github/scripts/resolve-upstream.sh --self-test   # ~1s, no network
 .github/scripts/resolve-upstream.sh --plan        # what it would build, changes nothing
 git apply --check patches/jellyfin-ffmpeg/*.patch # against an upstream checkout
 ```
+
+`checks.yaml` runs the first and third of these on every push and pull request, so a patch added
+without a declaration, or a gate that stopped working, fails in about 20 seconds rather than at
+the next upstream release.
+
+`verify-binary.sh --self-test` is the one to reach for after touching anything about the gate. It
+builds stub `ffmpeg` binaries in a temp directory and runs the real script against them, so it
+proves the gate **passes a good binary** — not only that it rejects a bad one. It includes the
+asymmetric case that costs the most to get wrong: a build with no `hevc_vaapi` must fail on linux
+and pass on windows.
 
 Then dispatch with `mode: dry_run` or `mode: smoke` — both about **3 minutes**, measured. Only
 `mode: full` costs hours.
@@ -313,3 +463,7 @@ Then dispatch with `mode: dry_run` or `mode: smoke` — both about **3 minutes**
 So a green smoke run proves plumbing: resolution, patching, artifact names and layout, the
 four-asset assertion, and that every runner label allocates. It does not prove the binaries or
 the release update.
+
+It *does* now prove the patch declarations: `verify-binary.sh --self-test` runs in the `resolve`
+job, before any mode branch, so smoke and `dry_run` both catch an undeclared patch. Only the four
+per-target verify steps need a real binary, and only those are skipped.
