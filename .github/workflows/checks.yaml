@@ -36,8 +36,9 @@ jobs:
       - name: resolve-upstream self-test
         run: ./.github/scripts/resolve-upstream.sh --self-test
 
-      # bash 3.2 is what macOS ships and what the README tells people to hand-run this on. The
-      # runners have bash 5, so a bashism would pass here and fail on a maintainer's laptop.
+      # bash 3.2 is what macOS ships, and docs/verification-gate.md tells people to hand-run this
+      # script there. The runners have bash 5, so a bashism would pass here and fail on a
+      # maintainer's laptop.
       - name: Reject bashisms the macOS bash cannot run
         run: |
           set -euo pipefail

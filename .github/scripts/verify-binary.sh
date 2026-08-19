@@ -46,6 +46,7 @@ set -uo pipefail
 SELF_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PATCH_DIR="${PATCH_DIR:-$SELF_DIR/../../patches/jellyfin-ffmpeg}"
 CHECKS_DIR="${CHECKS_DIR:-$PATCH_DIR/checks}"
+DOCS_DIR="${DOCS_DIR:-$SELF_DIR/../../docs/patches}"
 
 VALID_KINDS=" encoder-option filter ungateable "
 VALID_PLATFORMS=" all linux windows "
@@ -127,6 +128,21 @@ check_ids() {
   done
 }
 
+# Docs are keyed on the four-digit prefix only, same as checks: patch titles get edited, and a
+# full-name-keyed doc would silently orphan on a retitle. The glob is NNNN-*.md so the filename can
+# still be readable.
+doc_ids() {
+  local f b
+  for f in "$DOCS_DIR"/*.md; do
+    [ -e "$f" ] || continue
+    b=$(basename "$f")
+    # Only well-formed names produce an id. A malformed one is reported by the filename lint in
+    # pair_gate; letting it through here too would pair it against nothing and print a second,
+    # nonsensical "orphan" error for the same cause.
+    case "$b" in [0-9][0-9][0-9][0-9]-*.md) echo "${b%%-*}" ;; esac
+  done
+}
+
 # Every directive prefixed with the id of the file it came from, so errors name the offender.
 load_all() {
   local f id
@@ -153,6 +169,27 @@ pair_gate() {
       "orphan "*)  echo "::error::checks/${line#orphan }.checks has no matching patch — a deleted patch left a declaration claiming coverage"; fail=1 ;;
     esac
   done <<<"$(pair_ids "$(patch_ids)" "$(check_ids | grep -v '^baseline$')")"
+
+  # Same rule for the per-patch docs. A patch has to say how it is proven (checks) AND what it is
+  # (doc); the doc is the canonical description, so a missing one is not cosmetic.
+  while read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      "missing "*) echo "::error::patch ${line#missing } has no docs/patches/${line#missing }-*.md — every patch needs a doc, and it is the canonical description"; fail=1 ;;
+      "orphan "*)  echo "::error::docs/patches/${line#orphan }-*.md has no matching patch — a deleted patch left its doc behind"; fail=1 ;;
+    esac
+  done <<<"$(pair_ids "$(patch_ids)" "$(doc_ids)")"
+
+  # A doc whose name does not start NNNN- would land in doc_ids as junk and pair against nothing.
+  local f b
+  for f in "$DOCS_DIR"/*.md; do
+    [ -e "$f" ] || continue
+    b=$(basename "$f")
+    case "$b" in
+      [0-9][0-9][0-9][0-9]-*.md) ;;
+      *) echo "::error::docs/patches/$b: filename must be NNNN-slug.md"; fail=1 ;;
+    esac
+  done
 }
 
 lint() {
@@ -387,6 +424,10 @@ Exiting with exit code 0"
 0009')" 'missing 0005
 orphan 0009'
   ok "a consistent set reports nothing" "$(pair_ids '0001' '0001')" ''
+  # the doc pairing reuses pair_ids, so it inherits these -- but assert the direction names too
+  ok "a patch with no doc is missing" \
+     "$(pair_ids '0001
+0004' '0001')" 'missing 0004'
   ok "empty on both sides reports nothing" "$(pair_ids '' '')" ''
 
   # -- fail accumulation must survive the loops. `awk | while read` puts the body in a subshell
@@ -402,6 +443,14 @@ orphan 0009'
   ok_true "checks dir exists" [ -d "$CHECKS_DIR" ]
   ok "every patch is declared, and no declaration is orphaned" \
      "$(pair_ids "$(patch_ids)" "$(check_ids | grep -v '^baseline$')")" ''
+  ok "every patch has a doc, and no doc is orphaned" \
+     "$(pair_ids "$(patch_ids)" "$(doc_ids)")" ''
+  local baddoc=0 d
+  for d in "$DOCS_DIR"/*.md; do
+    [ -e "$d" ] || continue
+    case "$(basename "$d")" in [0-9][0-9][0-9][0-9]-*.md) ;; *) baddoc=$((baddoc+1)) ;; esac
+  done
+  ok "no doc filename outside NNNN-slug.md" "$baddoc" 0
 
   local bad_id=0 bad_kind=0 bad_plat=0 empty_file=0 no_reason=0 id kind platform rest
   while read -r id; do
@@ -578,6 +627,7 @@ self_test_e2e() {
 [ -d "$CHECKS_DIR" ] || { echo "::error::no checks directory at $CHECKS_DIR"; exit 1; }
 [ -n "$(check_ids)" ] || { echo "::error::$CHECKS_DIR declares nothing — refusing to pass vacuously"; exit 1; }
 [ -n "$(patch_ids)" ] || { echo "::error::no patches found in $PATCH_DIR"; exit 1; }
+[ -d "$DOCS_DIR" ] || { echo "::error::no patch-docs directory at $DOCS_DIR"; exit 1; }
 
 case "${1:-}" in
   --self-test) self_test; exit 0 ;;
