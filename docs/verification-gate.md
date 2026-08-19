@@ -90,6 +90,17 @@ would be a silent no-op rather than an error.
 The doc filename is keyed on the **four-digit prefix**, and the gate globs `NNNN-*.md`. Retitling a
 patch therefore cannot orphan its doc — the same reason `checks/` keys on the number alone.
 
+## Retiring a patch
+
+The mirror of adding one: delete the patch **and both its artifacts** —
+`patches/jellyfin-ffmpeg/checks/NNNN.checks` and `docs/patches/NNNN-*.md`.
+
+The pairing gate fails on either one left behind, reporting it as an `orphan`. That is loud rather
+than silent, which is the point — but it is two more files than people expect, and the gate is the
+only thing that will remind you.
+
+Each patch doc carries its own retire condition in its header table.
+
 ## Checking a built binary by hand
 
 CI already does this on every build. To repeat it on a downloaded asset, run the same script the
