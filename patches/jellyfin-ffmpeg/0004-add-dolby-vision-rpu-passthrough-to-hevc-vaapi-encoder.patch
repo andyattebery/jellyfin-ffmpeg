@@ -1,8 +1,8 @@
-diff --git a/debian/patches/0099-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch b/debian/patches/0099-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch
+diff --git a/debian/patches/0901-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch b/debian/patches/0901-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch
 new file mode 100644
 --- /dev/null
-+++ b/debian/patches/0099-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch
-@@ -0,0 +1,707 @@
++++ b/debian/patches/0901-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch
+@@ -0,0 +1,838 @@
 +Add Dolby Vision RPU passthrough to the HEVC VAAPI encoder.
 +
 +hevc_vaapi drops Dolby Vision on transcode. FFmpeg has all the machinery --
@@ -82,13 +82,48 @@ new file mode 100644
 +the mismatch.
 +
 +So the RPU is brought to the single-layer profile 8 shape here instead, in
-+vaapi_encode_h265_dovi_fixup(), on the copy the L5 handling already makes:
-+el_spatial_resampling_filter_flag = 0, disable_residual_flag = 1, and
-+nlq_method_idc = AV_DOVI_NLQ_NONE. All three are needed -- NLQ is emitted
-+whenever nlq_method_idc != NONE, gated independently of disable_residual_flag,
-+so clearing only the header flags would write NLQ into a stream that declares no
-+residual. The conversion is logged once; it is lossy in principle, though the
-+enhancement layer is gone before the encoder ever sees the frame.
++vaapi_encode_h265_dovi_fixup(), on the copy the L5 handling already makes. It
++mirrors dovi_tool's convert_to_p81_remove_mapping():
++
++  el_spatial_resampling_filter_flag = 0
++  disable_residual_flag             = 1
++  nlq_method_idc                    = AV_DOVI_NLQ_NONE
++  num_x_partitions                  = 1
++  num_y_partitions                  = 1
++  FEL only: all three reshaping curves reset to the identity mapping
++
++The last three are not optional for the same reason as the NLQ. dovi_rpuenc.c
++writes num_x/y_partitions with set_ue_golomb *outside* the
++"if (nlq_method_idc != AV_DOVI_NLQ_NONE)" block, so a profile 7 source's values
++otherwise pass straight into a stream declaring no residual. And the reshaping
++curves describe a base layer that expected the enhancement layer residual to be
++added on top; with the EL gone they describe something that is not there.
++
++FEL versus MEL is decided from the NLQ payload, which means it MUST be read
++before nlq_method_idc is cleared -- the code notes this, because the ordering is
++not obvious and getting it wrong silently disables the whole test. dovi_tool
++checks seven values in is_mel(); FFmpeg packs the integer and fractional parts
++together via get_ue_coef(), so the same test is four comparisons per component:
++nlq_offset == 0, vdr_in_max == 1 << coef_log2_denom, and both linear deadzone
++terms == 0.
++
++Measured across ten profile 7 sources, all with coef_log2_denom 23: MEL carries
++nlq_offset 0 and vdr_in_max int 1 / frac 0; FEL carries 512 and int 0 / frac
++1048576. Either field discriminates on its own.
++
++The conversion is logged once, naming the EL type, and says when the mapping was
++dropped. Dropping it is lossy in principle, though the enhancement layer is gone
++before the encoder ever sees a frame.
++
++Not done, deliberately: dovi_tool's convert_to_p81() also calls
++vdr_dm_data.set_p81_coeffs(), replacing the DM ycc_to_rgb and rgb_to_lms
++matrices with canonical values. Across the same ten sources those coefficients
++are ALREADY identical to what -m 2 produces, so the assignment would be a no-op
++that carries a real hazard: ff_dovi_rpu_generate() uses memcmp against
++ff_dovi_color_default as its sentinel for "omit the DM block entirely", so
++assigning a default-valued struct can silently drop the DM metadata. The
++source's own matrices describe a BT.2020 PQ base layer faithfully. If a source
++ever turns up whose coefficients -m 2 does change, revisit this.
 +
 +Profile 5 is untouched: it has vdr_rpu_profile 0, so the guess returns 5 and the
 +conversion does not fire.
@@ -164,16 +199,38 @@ new file mode 100644
 +header claim a stream can carry with no RPU behind it, which is exactly how the
 +profile 7 bug hid:
 +
-+  P8.1  -dolbyvision 1   profile 8 tag, RPU profile 8, 20/20 frames carry an RPU
-+  P5    -dolbyvision 1   profile 5 tag, compat 0, not converted
-+  P7    -dolbyvision 1   converted; RPU profile 8, disable_residual_flag true,
-+                         NLQ absent  (before this change: RPU still profile 7)
-+  auto  (any source)     no DV, now warns once
++  P8.1      -dolbyvision 1   profile 8 tag, RPU profile 8, 20/20 frames carry an RPU
++  P5        -dolbyvision 1   profile 5 tag, compat 0, not converted
++  P7 FEL    -dolbyvision 1   converted; RPU profile 8, disable_residual_flag true,
++            (Forrest Gump)   NLQ absent, mapping reset
++  P7 MEL    -dolbyvision 1   converted; mapping left alone, EL type logged as MEL
++            (Dune 2021)
++  auto      (any source)     no DV, now warns once
 +  L5    keep  4K->1080p  offsets stay 276, now warns once
 +  L5    scale + canvas   offsets rescale 276 -> 138
 +  mp4   -strict unofficial   dvcC written, hvc1 tag
 +
-+Two things remain unverified, both for lack of a way to reach them:
++The profile 7 rows are the load-bearing ones and are checked by diffing the
++encoder's RPU against dovi_tool -m 2 as JSON, not by inspecting the three fields
++this code happens to set. That distinction matters: the previous round's test
++asserted exactly the fields it implemented, so it could not have detected the
++missing mapping reset. On Forrest Gump the released binary differs from the
++reference in 26 rpu_data_mapping fields; with this change, zero.
++
++Content was screened first, which is what showed the reset is needed: of seven
++profile 7 FEL sources, six carry non-identity mappings that -m 2 resets. The
++seventh (Drive) is already identity -- and had been the only file tested, which
++is how the gap survived a round of verification. Partitions and DM coefficients
++changed on none of the ten.
++
++Three things remain unverified:
++
++- The MEL branch preserves a mapping only in principle. All three MEL sources
++  screened already carry the identity mapping, so "reset" and "leave alone"
++  produce identical bytes on them. The branch is proven to *detect* correctly --
++  the log names the EL type -- but not to *preserve* a non-identity MEL mapping,
++  because no such source was found. Three of thirty-three is too small to claim
++  MEL mappings are always identity.
 +
 +- B-frames. This encoder reports "supported references: 1 / 0" on RDNA4/Mesa
 +  26.0.4 and produces I and P frames only, so encode order equals display order
@@ -301,7 +358,7 @@ new file mode 100644
 + } VAAPIEncodeH265Context;
 + 
 + 
-+@@ -475,6 +493,134 @@ static int vaapi_encode_h265_init_sequen
++@@ -475,6 +493,208 @@ static int vaapi_encode_h265_init_sequen
 +     return 0;
 + }
 + 
@@ -329,6 +386,65 @@ new file mode 100644
 ++ * the original. AVDOVIMetadata is a flat buffer addressed by internal byte
 ++ * offsets, so copying the side data verbatim keeps every accessor valid.
 ++ */
+++/*
+++ * Is this enhancement layer MEL (minimal) rather than FEL (full)?
+++ *
+++ * dovi_tool decides with get_enhancement_layer_type() -> el_type() -> is_mel(),
+++ * which tests the NLQ payload. dovi_tool checks seven values because it keeps
+++ * integer and fractional parts apart; FFmpeg packs them -- get_ue_coef() in
+++ * dovi_rpudec.c returns (ipart << coef_log2_denom) | fpart -- so the same test
+++ * is four comparisons per component here.
+++ *
+++ * Measured across ten profile 7 sources (coef_log2_denom 23 on all of them):
+++ * MEL carries nlq_offset 0 and vdr_in_max int 1 / frac 0, FEL carries
+++ * nlq_offset 512 and int 0 / frac 1048576. Either field discriminates alone;
+++ * all four are checked to match the reference.
+++ */
+++static int vaapi_encode_h265_dovi_el_is_mel(const AVDOVIRpuDataHeader *hdr,
+++                                            const AVDOVIDataMapping *map)
+++{
+++    const uint64_t one = 1ULL << hdr->coef_log2_denom;
+++
+++    if (map->nlq_method_idc == AV_DOVI_NLQ_NONE)
+++        return 0;
+++
+++    for (int c = 0; c < 3; c++) {
+++        const AVDOVINLQParams *nlq = &map->nlq[c];
+++        if (nlq->nlq_offset != 0 || nlq->vdr_in_max != one ||
+++            nlq->linear_deadzone_slope != 0 || nlq->linear_deadzone_threshold != 0)
+++            return 0;
+++    }
+++    return 1;
+++}
+++
+++/*
+++ * Reset the three reshaping curves to the identity mapping, matching
+++ * dovi_tool's set_empty_p81_mapping(). The source curves describe a base layer
+++ * that expected the enhancement layer residual to be added on top; with the EL
+++ * gone they describe something that no longer exists.
+++ *
+++ * The 1023 upper pivot is dovi_tool's own hardcoded value and assumes a 10-bit
+++ * base layer. Matching the reference is what the RPU-diff verification tests,
+++ * and every Dolby Vision title measured in this library is 10-bit.
+++ */
+++static void vaapi_encode_h265_dovi_reset_mapping(const AVDOVIRpuDataHeader *hdr,
+++                                                 AVDOVIDataMapping *map)
+++{
+++    for (int c = 0; c < 3; c++) {
+++        AVDOVIReshapingCurve *curve = &map->curves[c];
+++
+++        memset(curve, 0, sizeof(*curve));
+++        curve->num_pivots      = 2;
+++        curve->pivots[0]       = 0;
+++        curve->pivots[1]       = 1023;
+++        curve->mapping_idc[0]  = AV_DOVI_MAPPING_POLYNOMIAL;
+++        curve->poly_order[0]   = 1;
+++        curve->poly_coef[0][0] = 0;
+++        curve->poly_coef[0][1] = 1LL << hdr->coef_log2_denom;
+++        curve->poly_coef[0][2] = 0;
+++    }
+++}
+++
 ++static int vaapi_encode_h265_dovi_fixup(AVCodecContext *avctx,
 ++                                        const AVFrameSideData *sd,
 ++                                        AVDOVIMetadata **out)
@@ -336,7 +452,7 @@ new file mode 100644
 ++    VAAPIEncodeH265Context *priv = avctx->priv_data;
 ++    const AVDOVIMetadata    *src = (const AVDOVIMetadata *)sd->data;
 ++    AVDOVIMetadata          *dst;
-++    int src_profile, need_el_strip = 0, need_l5 = 0;
+++    int src_profile, need_el_strip = 0, need_l5 = 0, is_mel = 0;
 ++
 ++    *out = NULL;
 ++
@@ -346,8 +462,14 @@ new file mode 100644
 ++     * out still describing an EL that is not in the stream, while the
 ++     * configuration record says profile 8. */
 ++    src_profile = ff_dovi_guess_profile_hevc(av_dovi_get_header(src));
-++    if (src_profile == 4 || src_profile == 7)
+++    if (src_profile == 4 || src_profile == 7) {
 ++        need_el_strip = 1;
+++        /* MUST be decided here, on the untouched source: the EL type is
+++         * derived from the NLQ payload, and the strip below clears
+++         * nlq_method_idc before anything could test it. */
+++        is_mel = vaapi_encode_h265_dovi_el_is_mel(av_dovi_get_header(src),
+++                                                  av_dovi_get_mapping(src));
+++    }
 ++
 ++    if (priv->dv_l5 != DV_L5_KEEP) {
 ++        for (int i = 0; i < src->num_ext_blocks; i++) {
@@ -387,18 +509,27 @@ new file mode 100644
 ++        AVDOVIRpuDataHeader *hdr = av_dovi_get_header(dst);
 ++        AVDOVIDataMapping   *map = av_dovi_get_mapping(dst);
 ++
-++        /* The two flags ff_dovi_guess_profile_hevc() keys on, plus the NLQ
-++         * itself: NLQ is written whenever nlq_method_idc != NONE, gated
-++         * independently of disable_residual_flag, so clearing only the header
-++         * would emit NLQ into a stream declaring no residual. */
+++        /* The two flags ff_dovi_guess_profile_hevc() keys on, plus the NLQ and
+++         * the mapping partitions: both are written outside the
+++         * nlq_method_idc != NONE gate in dovi_rpuenc.c, so leaving either would
+++         * emit enhancement-layer data into a stream declaring no residual. */
 ++        hdr->el_spatial_resampling_filter_flag = 0;
 ++        hdr->disable_residual_flag             = 1;
 ++        map->nlq_method_idc                    = AV_DOVI_NLQ_NONE;
+++        map->num_x_partitions                  = 1;
+++        map->num_y_partitions                  = 1;
+++
+++        /* FEL only, matching dovi_tool's convert_to_p81_remove_mapping(). A MEL
+++         * enhancement layer carries no residual to fold in, so its mapping is
+++         * left alone. */
+++        if (!is_mel)
+++            vaapi_encode_h265_dovi_reset_mapping(hdr, map);
 ++
 ++        if (!priv->dv_logged_p7) {
-++            av_log(avctx, AV_LOG_INFO, "Converting Dolby Vision profile %d RPU "
+++            av_log(avctx, AV_LOG_INFO, "Converting Dolby Vision profile %d %s RPU "
 ++                   "to single-layer profile 8; the enhancement layer is not "
-++                   "encoded.\n", src_profile);
+++                   "encoded%s.\n", src_profile, is_mel ? "MEL" : "FEL",
+++                   is_mel ? "" : " and its reshaping mapping is dropped");
 ++            priv->dv_logged_p7 = 1;
 ++        }
 ++    }
@@ -436,7 +567,7 @@ new file mode 100644
 + static int vaapi_encode_h265_init_picture_params(AVCodecContext *avctx,
 +                                                  FFHWBaseEncodePicture *pic)
 + {
-+@@ -688,6 +834,71 @@ static int vaapi_encode_h265_init_pictur
++@@ -688,6 +908,71 @@ static int vaapi_encode_h265_init_pictur
 +         av_assert0(0 && "invalid picture type");
 +     }
 + 
@@ -508,7 +639,7 @@ new file mode 100644
 +     return 0;
 + }
 + 
-+@@ -980,6 +1191,85 @@ static av_cold int vaapi_encode_h265_get
++@@ -980,6 +1265,85 @@ static av_cold int vaapi_encode_h265_get
 +     return 0;
 + }
 + 
@@ -594,7 +725,7 @@ new file mode 100644
 + static av_cold int vaapi_encode_h265_configure(AVCodecContext *avctx)
 + {
 +     VAAPIEncodeContext      *ctx = avctx->priv_data;
-+@@ -1022,6 +1312,10 @@ static av_cold int vaapi_encode_h265_con
++@@ -1022,6 +1386,10 @@ static av_cold int vaapi_encode_h265_con
 + 
 +     ctx->roi_quant_range = 51 + 6 * (ctx->profile->depth - 8);
 + 
@@ -605,7 +736,7 @@ new file mode 100644
 +     return 0;
 + }
 + 
-+@@ -1113,6 +1407,7 @@ static av_cold int vaapi_encode_h265_clo
++@@ -1113,6 +1481,7 @@ static av_cold int vaapi_encode_h265_clo
 +     ff_cbs_fragment_free(&priv->current_access_unit);
 +     ff_cbs_close(&priv->cbc);
 +     av_freep(&priv->sei_a53cc_data);
@@ -613,7 +744,7 @@ new file mode 100644
 + 
 +     return ff_vaapi_encode_close(avctx);
 + }
-+@@ -1130,6 +1425,26 @@ static const AVOption vaapi_encode_h265_
++@@ -1130,6 +1499,26 @@ static const AVOption vaapi_encode_h265_
 +     { "aud", "Include AUD",
 +       OFFSET(aud), AV_OPT_TYPE_BOOL, { .i64 = 0 }, 0, 1, FLAGS },
 + 
@@ -710,11 +841,3 @@ new file mode 100644
 +             return AVERROR(EINVAL);
 +         }
 +         break;
-diff --git a/debian/patches/series b/debian/patches/series
---- a/debian/patches/series
-+++ b/debian/patches/series
-@@ -96,3 +96,4 @@
- 0096-fix-full-range-input-for-mjpeg-vaapi-encoder.patch
- 0097-add-misc-enhancements-to-mfenc-hw-encoder.patch
- 0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
-+0099-add-dolby-vision-rpu-passthrough-to-hevc-vaapi-encoder.patch
