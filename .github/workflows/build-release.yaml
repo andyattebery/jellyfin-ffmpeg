@@ -131,8 +131,32 @@ jobs:
           path: .fork
           fetch-depth: 1
 
+      # The recipe's source patches only CREATE debian/patches/09xx-*.patch; they deliberately do
+      # not patch debian/patches/series. Appending a line with a diff hunk anchors it to the tail
+      # of that file, and the tail is exactly what upstream changes -- v8.1.2-3 added a patch and
+      # broke every build. So the line is generated here instead. Idempotent, and 09* cannot
+      # collide with upstream's 00xx numbering.
+      #
+      # The want/got check is load-bearing: without it a source patch that failed to create its
+      # file would make this a silent no-op and the build would succeed WITHOUT the patch. The
+      # gate would catch that for 0004, but not for 0003, which is declared ungateable.
       - name: Apply patch series
-        run: git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+        run: |
+          set -euo pipefail
+          git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+          want=$(grep -l 'debian/patches/09' .fork/patches/jellyfin-ffmpeg/*.patch | wc -l | tr -d ' ')
+          got=0
+          for f in debian/patches/09*.patch; do
+            [ -e "$f" ] || continue
+            b=$(basename "$f")
+            got=$((got + 1))
+            grep -qxF "$b" debian/patches/series || echo "$b" >> debian/patches/series
+          done
+          [ "$got" -eq "$want" ] || {
+            echo "::error::expected $want recipe patches in debian/patches, found $got"
+            exit 1
+          }
+          echo "  appended $got recipe patches; series is now $(wc -l < debian/patches/series) long"
 
       - name: Stub artifact (smoke only)
         if: needs.resolve.outputs.mode == 'smoke'
@@ -202,8 +226,32 @@ jobs:
           path: .fork
           fetch-depth: 1
 
+      # The recipe's source patches only CREATE debian/patches/09xx-*.patch; they deliberately do
+      # not patch debian/patches/series. Appending a line with a diff hunk anchors it to the tail
+      # of that file, and the tail is exactly what upstream changes -- v8.1.2-3 added a patch and
+      # broke every build. So the line is generated here instead. Idempotent, and 09* cannot
+      # collide with upstream's 00xx numbering.
+      #
+      # The want/got check is load-bearing: without it a source patch that failed to create its
+      # file would make this a silent no-op and the build would succeed WITHOUT the patch. The
+      # gate would catch that for 0004, but not for 0003, which is declared ungateable.
       - name: Apply patch series
-        run: git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+        run: |
+          set -euo pipefail
+          git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+          want=$(grep -l 'debian/patches/09' .fork/patches/jellyfin-ffmpeg/*.patch | wc -l | tr -d ' ')
+          got=0
+          for f in debian/patches/09*.patch; do
+            [ -e "$f" ] || continue
+            b=$(basename "$f")
+            got=$((got + 1))
+            grep -qxF "$b" debian/patches/series || echo "$b" >> debian/patches/series
+          done
+          [ "$got" -eq "$want" ] || {
+            echo "::error::expected $want recipe patches in debian/patches, found $got"
+            exit 1
+          }
+          echo "  appended $got recipe patches; series is now $(wc -l < debian/patches/series) long"
 
       - name: Stub artifact (smoke only)
         if: needs.resolve.outputs.mode == 'smoke'
@@ -264,8 +312,32 @@ jobs:
           path: .fork
           fetch-depth: 1
 
+      # The recipe's source patches only CREATE debian/patches/09xx-*.patch; they deliberately do
+      # not patch debian/patches/series. Appending a line with a diff hunk anchors it to the tail
+      # of that file, and the tail is exactly what upstream changes -- v8.1.2-3 added a patch and
+      # broke every build. So the line is generated here instead. Idempotent, and 09* cannot
+      # collide with upstream's 00xx numbering.
+      #
+      # The want/got check is load-bearing: without it a source patch that failed to create its
+      # file would make this a silent no-op and the build would succeed WITHOUT the patch. The
+      # gate would catch that for 0004, but not for 0003, which is declared ungateable.
       - name: Apply patch series
-        run: git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+        run: |
+          set -euo pipefail
+          git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+          want=$(grep -l 'debian/patches/09' .fork/patches/jellyfin-ffmpeg/*.patch | wc -l | tr -d ' ')
+          got=0
+          for f in debian/patches/09*.patch; do
+            [ -e "$f" ] || continue
+            b=$(basename "$f")
+            got=$((got + 1))
+            grep -qxF "$b" debian/patches/series || echo "$b" >> debian/patches/series
+          done
+          [ "$got" -eq "$want" ] || {
+            echo "::error::expected $want recipe patches in debian/patches, found $got"
+            exit 1
+          }
+          echo "  appended $got recipe patches; series is now $(wc -l < debian/patches/series) long"
 
       - name: Prepare prefix dir
         run: mkdir /clang64/ffbuild
@@ -340,8 +412,32 @@ jobs:
           path: .fork
           fetch-depth: 1
 
+      # The recipe's source patches only CREATE debian/patches/09xx-*.patch; they deliberately do
+      # not patch debian/patches/series. Appending a line with a diff hunk anchors it to the tail
+      # of that file, and the tail is exactly what upstream changes -- v8.1.2-3 added a patch and
+      # broke every build. So the line is generated here instead. Idempotent, and 09* cannot
+      # collide with upstream's 00xx numbering.
+      #
+      # The want/got check is load-bearing: without it a source patch that failed to create its
+      # file would make this a silent no-op and the build would succeed WITHOUT the patch. The
+      # gate would catch that for 0004, but not for 0003, which is declared ungateable.
       - name: Apply patch series
-        run: git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+        run: |
+          set -euo pipefail
+          git apply --verbose .fork/patches/jellyfin-ffmpeg/*.patch
+          want=$(grep -l 'debian/patches/09' .fork/patches/jellyfin-ffmpeg/*.patch | wc -l | tr -d ' ')
+          got=0
+          for f in debian/patches/09*.patch; do
+            [ -e "$f" ] || continue
+            b=$(basename "$f")
+            got=$((got + 1))
+            grep -qxF "$b" debian/patches/series || echo "$b" >> debian/patches/series
+          done
+          [ "$got" -eq "$want" ] || {
+            echo "::error::expected $want recipe patches in debian/patches, found $got"
+            exit 1
+          }
+          echo "  appended $got recipe patches; series is now $(wc -l < debian/patches/series) long"
 
       - name: Prepare prefix dir
         run: mkdir /clangarm64/ffbuild

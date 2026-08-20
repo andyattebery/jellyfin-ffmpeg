@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Status** | Shipping. Verified end to end on hardware, after a first version that was wrong. |
-| **Covers** | All targets — goes into `debian/patches/` as `0098`, so every build system applies it |
+| **Covers** | All targets — goes into `debian/patches/` as `0900`, so every build system applies it |
 | **Retires when** | Upstream jellyfin-ffmpeg (or FFmpeg) accepts the alpha 10-bit RGB DRM entries |
 | **Gate** | `checks/0003.checks` — declared `ungateable`, with the reason. A format-table entry appears in neither `-h encoder=` nor `-filters`. |
 
@@ -86,9 +86,10 @@ not have. So `0003` is outside the gate by construction rather than by omission,
 - **Do not reorder the table entries.** The X entries sit ahead of these, and `vaapi_map_to_drm()`
   takes the first `va_fourcc` match, so VAAPI → DRM still emits the X spellings. Putting the alpha
   entries first would silently change the export direction.
-- **`0004` depends on this patch existing.** Its series hunk uses `0096`/`0097`/`0098` as context
-  and `0098` is this patch, so retiring `0003` breaks `0004`'s `git apply`. Loud, not silent, but
-  worth knowing before you delete anything.
+- **The patch does not touch `debian/patches/series`.** It only creates
+  `debian/patches/0900-*.patch`; the series line is appended by the build step. A diff that appends
+  is anchored to the tail of that file, and upstream keeps moving the tail — v8.1.2-3 added a patch
+  and broke every build. `0900` is out of upstream's numbering range so it cannot collide.
 - **A wrong pairing does not error.** It produces a valid file at full speed. The only thing that
   catches it is per-channel PSNR — a high *average* with wrecked chroma looks fine at a glance.
 

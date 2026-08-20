@@ -1,7 +1,7 @@
-diff --git a/debian/patches/0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch b/debian/patches/0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
+diff --git a/debian/patches/0900-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch b/debian/patches/0900-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
 new file mode 100644
 --- /dev/null
-+++ b/debian/patches/0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
++++ b/debian/patches/0900-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch
 @@ -0,0 +1,52 @@
 +Allow VAAPI to import the ALPHA spellings of the 10-bit RGB DRM formats.
 +
@@ -55,11 +55,3 @@ new file mode 100644
 + };
 + #undef DRM_MAP
 + 
-diff --git a/debian/patches/series b/debian/patches/series
---- a/debian/patches/series
-+++ b/debian/patches/series
-@@ -95,3 +95,4 @@
- 0095-add-scale-d3d11-p010-shader-fallback.patch
- 0096-fix-full-range-input-for-mjpeg-vaapi-encoder.patch
- 0097-add-misc-enhancements-to-mfenc-hw-encoder.patch
-+0098-allow-vaapi-import-of-alpha-10-bit-rgb-drm-formats.patch

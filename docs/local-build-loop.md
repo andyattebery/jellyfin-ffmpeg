@@ -39,6 +39,15 @@ git clone --depth 1 --branch "$UPSTREAM_TAG" \
     https://github.com/jellyfin/jellyfin-ffmpeg.git "$SCRATCH/src"
 cd "$SCRATCH/src"
 git apply /path/to/this/repo/patches/jellyfin-ffmpeg/*.patch
+
+# The source patches only create debian/patches/09xx-*.patch. They do not touch
+# debian/patches/series -- a diff that appends is anchored to a tail upstream keeps moving,
+# so the line is generated instead. Do the same by hand:
+for f in debian/patches/09*.patch; do
+  b=$(basename "$f")
+  grep -qxF "$b" debian/patches/series || echo "$b" >> debian/patches/series
+done
+
 ln -s debian/patches patches      # quilt looks for patches/ at the tree root, as builder/build.sh:64 does
 ```
 

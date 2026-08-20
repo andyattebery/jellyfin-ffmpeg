@@ -137,9 +137,17 @@ cacheable if that ever becomes worth the added moving parts; it is deliberately 
 ## Reproducing a build by hand
 
 ```bash
-git clone -b v8.1.2-2 https://github.com/jellyfin/jellyfin-ffmpeg.git
+git clone -b v8.1.2-3 https://github.com/jellyfin/jellyfin-ffmpeg.git
 cd jellyfin-ffmpeg
 git apply /path/to/patches/jellyfin-ffmpeg/*.patch
+
+# The source patches only create debian/patches/09xx-*.patch -- they deliberately do not
+# patch debian/patches/series, because a diff that appends is anchored to a tail upstream
+# keeps moving. Add the lines yourself:
+for f in debian/patches/09*.patch; do
+  b=$(basename "$f")
+  grep -qxF "$b" debian/patches/series || echo "$b" >> debian/patches/series
+done
 
 ./build-linux-amd64 ./dist     # linux64    — needs docker; ~2.5h
 ./build-linux-arm64 ./dist     # linuxarm64 — needs docker; cross-compiled on an x86-64 host
