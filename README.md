@@ -47,13 +47,18 @@ does not.
 | [0003](docs/patches/0003-vaapi-alpha-10bit-rgb.md) | VAAPI import of the alpha 10-bit RGB DRM formats | all targets | shipping, verified on hardware; not gateable |
 | [0004](docs/patches/0004-dolby-vision-hevc-vaapi.md) | Dolby Vision RPU passthrough for `hevc_vaapi` | all targets, linux-only feature | shipping, verified on hardware |
 | [0005](docs/patches/0005-allow-options-on-derived-hw-devices.md) | options on a derived hardware device (`-init_hw_device …@src,opt=val`) | all targets | shipping, verified on hardware; not gateable |
+| [0006](docs/patches/0006-disable-msys2-doxygen-doc-builds.md) | stop the msys2 packages building doxygen docs | `win64` + `winarm64` | shipping, works around a toolchain crash; not gateable |
 
 **The docs are canonical**; this table is an index.
 
-The two kinds behave differently. `0001`/`0002` patch *build systems* — they move a dependency pin,
-and each covers only the targets its build system produces, which is why one pin takes two patches.
-`0003`/`0004`/`0005` patch the *ffmpeg source*, by adding to jellyfin-ffmpeg's own
-`debian/patches/` series that every build system applies, so one patch covers every target.
+The two kinds behave differently. `0001`/`0002`/`0006` patch *build systems*, so each covers only
+the targets its build system produces — which is why one nv-codec-headers pin takes two patches,
+`0001` for `builder/` and `0002` for `msys2/`. `0003`/`0004`/`0005` patch the *ffmpeg source*, by
+adding to jellyfin-ffmpeg's own `debian/patches/` series that every build system applies, so one
+patch covers every target.
+
+Not every build-system patch adds a feature: `0006` removes a documentation build that was crashing
+the winarm64 job, and changes nothing about the binary.
 
 **Every patch carries two required artifacts**: a `checks/NNNN.checks` declaring how it is verified,
 and a `docs/patches/NNNN-*.md` saying what it is. Either one missing fails the gate — including a
@@ -74,9 +79,11 @@ Upstream produces **18 artifacts**. This repo builds **4**.
 | `debian-{bullseye,bookworm,trixie}-{amd64,arm64}` | no | **nothing** |
 | `ubuntu-{jammy,noble,resolute}-{amd64,arm64}` | no | **nothing** |
 
-Only `0001`/`0002` appear in that table. `0003`/`0004`/`0005` go into the ffmpeg patch series, so
-they reach every target every build system produces, including the `.deb` and mac builds this repo
-does not make.
+Only `0001`/`0002` appear in that table, because they are the ones that give an artifact its value.
+`0003`/`0004`/`0005` go into the ffmpeg patch series, so they reach every target every build system
+produces, including the `.deb` and mac builds this repo does not make. `0006` is absent for the
+opposite reason: it is msys2-only and adds no capability, having removed a documentation build that
+was crashing the winarm64 job.
 
 **The 12 `.deb` packages are the one real gap.** They come from a third build system
 (`Dockerfile.in` + `docker-build.sh`) with its own nv-codec-headers pin that neither pin patch

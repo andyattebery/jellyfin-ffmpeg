@@ -1,0 +1,61 @@
+diff --git a/msys2/PKGBUILD/10-mingw-w64-xz/PKGBUILD b/msys2/PKGBUILD/10-mingw-w64-xz/PKGBUILD
+index a652f10..de31f32 100644
+--- a/msys2/PKGBUILD/10-mingw-w64-xz/PKGBUILD
++++ b/msys2/PKGBUILD/10-mingw-w64-xz/PKGBUILD
+@@ -22,7 +22,6 @@ depends=("${MINGW_PACKAGE_PREFIX}-gettext-runtime")
+ makedepends=("${MINGW_PACKAGE_PREFIX}-cc"
+              "${MINGW_PACKAGE_PREFIX}-autotools"
+              "${MINGW_PACKAGE_PREFIX}-gettext-tools"
+-             "${MINGW_PACKAGE_PREFIX}-doxygen"
+              "po4a")
+ source=("https://github.com/tukaani-project/xz/releases/download/v${pkgver}/xz-${pkgver}.tar.xz")
+ sha256sums=('fff1ffcf2b0da84d308a14de513a1aa23d4e9aa3464d17e64b9714bfdd0bbfb6')
+@@ -47,7 +46,7 @@ build() {
+     --disable-symbol-versions \
+     --disable-shared \
+     --enable-static \
+-    --enable-doxygen
++    --disable-doxygen
+ 
+   make
+ }
+diff --git a/msys2/PKGBUILD/30-mingw-w64-opus/PKGBUILD b/msys2/PKGBUILD/30-mingw-w64-opus/PKGBUILD
+index 086e219..3d94809 100644
+--- a/msys2/PKGBUILD/30-mingw-w64-opus/PKGBUILD
++++ b/msys2/PKGBUILD/30-mingw-w64-opus/PKGBUILD
+@@ -16,7 +16,6 @@ msys2_references=(
+ license=('spdx:BSD-3-Clause')
+ makedepends=(
+     "${MINGW_PACKAGE_PREFIX}-cc"
+-    "${MINGW_PACKAGE_PREFIX}-doxygen"
+     "${MINGW_PACKAGE_PREFIX}-meson"
+     "${MINGW_PACKAGE_PREFIX}-ninja"
+ )
+@@ -47,6 +46,7 @@ build() {
+   mkdir -p build-${MSYSTEM} && cd build-${MSYSTEM}
+ 
+   # -Dasm is for ARM fixed point, not neon or x86 avx/sse
++  # -Ddocs=disabled overrides --auto-features=enabled below; doxygen segfaults on clangarm64.
+   MSYS2_ARG_CONV_EXCL="--prefix=" \
+     ${MINGW_TOOLCHAIN_PREFIX}/bin/meson.exe setup \
+       --prefix="${FF_MINGW_PREFIX}" \
+@@ -56,6 +56,7 @@ build() {
+       --default-library=static \
+       -Dasm=disabled \
+       -Dcustom-modes=true \
++      -Ddocs=disabled \
+       ../${_realname}-${pkgver}
+ 
+   ${MINGW_TOOLCHAIN_PREFIX}/bin/meson.exe compile
+diff --git a/msys2/PKGBUILD/40-mingw-w64-libtheora/PKGBUILD b/msys2/PKGBUILD/40-mingw-w64-libtheora/PKGBUILD
+index 012497c..58931da 100644
+--- a/msys2/PKGBUILD/40-mingw-w64-libtheora/PKGBUILD
++++ b/msys2/PKGBUILD/40-mingw-w64-libtheora/PKGBUILD
+@@ -14,7 +14,6 @@ depends=("${MINGW_PACKAGE_PREFIX}-jellyfin-libpng"
+          "${MINGW_PACKAGE_PREFIX}-jellyfin-libogg"
+          "${MINGW_PACKAGE_PREFIX}-jellyfin-libvorbis")
+ makedepends=("${MINGW_PACKAGE_PREFIX}-cc"
+-             "${MINGW_PACKAGE_PREFIX}-doxygen"
+              "${MINGW_PACKAGE_PREFIX}-SDL"
+              "${MINGW_PACKAGE_PREFIX}-autotools")
+ source=("https://downloads.xiph.org/releases/theora/${_realname}-${pkgver}.tar.gz"

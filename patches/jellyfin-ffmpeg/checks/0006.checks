@@ -1,0 +1,24 @@
+# 0006 — stop the msys2 packages building doxygen documentation.
+#
+# Not gateable, and this file is the declaration of that rather than an absence someone has to
+# notice. The patch changes three PKGBUILDs: a configure flag, a meson option and three
+# makedepends entries. None of that is an AVOption and none of it is a filter, so it appears in
+# neither of the two things this gate can read.
+#
+# It is also the wrong shape for this gate in a second way: the patch REMOVES a build step. There
+# is no feature to look for in the resulting binary, because the binary is meant to be identical —
+# only the doc files beside it, which the portable artifact does not ship, are gone.
+#
+# What does catch it, and why that is enough:
+#
+#   - `git apply` fails loudly in the build job if the patch stops applying, exactly as it would
+#     for 0001 or 0002. This patch modifies existing files, so a drifted hunk is a hard error, not
+#     a silent no-op — unlike the source patches, which only create files.
+#   - the build itself fails if doxygen still runs and crashes, which is the whole reason the
+#     patch exists.
+#
+# Do not "fix" this by grepping the help output. Nothing the patch does appears there, so any such
+# check would pass on an unpatched binary — worse than no check, because it converts an honest gap
+# into a false claim of coverage.
+
+ungateable  windows  the patch removes a doxygen doc build from three msys2 PKGBUILDs; it adds nothing to the binary, so there is no feature for -h encoder= or -filters to report
