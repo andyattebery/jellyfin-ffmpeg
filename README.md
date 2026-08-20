@@ -13,13 +13,14 @@ own `builder/` directory is derived from.
 
 ## What the patches buy
 
-Three independent things. Any one is reason enough to keep the recipe, and they retire separately.
+Four independent things. Any one is reason enough to keep the recipe, and they retire separately.
 
 | | |
 |---|---|
 | [0001](docs/patches/0001-nv-codec-headers-linux.md) / [0002](docs/patches/0002-nv-codec-headers-windows.md) | `-tune uhq`, `-tf_level`, `-lookahead_level` and `-split_encode_mode` on NVENC, across all four targets |
 | [0003](docs/patches/0003-vaapi-alpha-10bit-rgb.md) | 10-bit VAAPI↔Vulkan tonemapping at the speed of the 8-bit path |
 | [0004](docs/patches/0004-dolby-vision-hevc-vaapi.md) | Dolby Vision surviving a hardware HEVC encode, in one pass |
+| [0005](docs/patches/0005-allow-options-on-derived-hw-devices.md) | device options reaching a *derived* hardware device from the command line at all |
 
 The NVENC options are what make this binary different from every published one — nothing else ships
 both `tonemap_cuda` and `-tune uhq`:
@@ -45,13 +46,14 @@ does not.
 | [0002](docs/patches/0002-nv-codec-headers-windows.md) | the same pin, `msys2/` | `win64` + `winarm64` | shipping, gated |
 | [0003](docs/patches/0003-vaapi-alpha-10bit-rgb.md) | VAAPI import of the alpha 10-bit RGB DRM formats | all targets | shipping, verified on hardware; not gateable |
 | [0004](docs/patches/0004-dolby-vision-hevc-vaapi.md) | Dolby Vision RPU passthrough for `hevc_vaapi` | all targets, linux-only feature | shipping, verified on hardware |
+| [0005](docs/patches/0005-allow-options-on-derived-hw-devices.md) | options on a derived hardware device (`-init_hw_device …@src,opt=val`) | all targets | shipping, verified on hardware; not gateable |
 
 **The docs are canonical**; this table is an index.
 
 The two kinds behave differently. `0001`/`0002` patch *build systems* — they move a dependency pin,
 and each covers only the targets its build system produces, which is why one pin takes two patches.
-`0003`/`0004` patch the *ffmpeg source*, by adding to jellyfin-ffmpeg's own `debian/patches/` series
-that every build system applies, so one patch covers every target.
+`0003`/`0004`/`0005` patch the *ffmpeg source*, by adding to jellyfin-ffmpeg's own
+`debian/patches/` series that every build system applies, so one patch covers every target.
 
 **Every patch carries two required artifacts**: a `checks/NNNN.checks` declaring how it is verified,
 and a `docs/patches/NNNN-*.md` saying what it is. Either one missing fails the gate — including a
@@ -68,13 +70,13 @@ Upstream produces **18 artifacts**. This repo builds **4**.
 | `linux-arm64-portable` | **yes** | [0001](docs/patches/0001-nv-codec-headers-linux.md) — same file covers both linux targets |
 | `win-clang-win64-portable` | **yes** | [0002](docs/patches/0002-nv-codec-headers-windows.md) |
 | `win-clang-winarm64-portable` | **yes** | [0002](docs/patches/0002-nv-codec-headers-windows.md) — same dir covers both windows targets |
-| `mac-x86_64-portable`, `mac-arm64-portable` | no | `50-ffnvcodec.sh:7` returns -1 for `mac*`, so ffnvcodec is off there entirely. `0003`/`0004` do reach mac via the patch series, but both are VAAPI-only and mac has no VAAPI, so a mac build here is functionally identical to upstream's. |
+| `mac-x86_64-portable`, `mac-arm64-portable` | no | `50-ffnvcodec.sh:7` returns -1 for `mac*`, so ffnvcodec is off there entirely — `0001`/`0002` buy nothing there. `0003`/`0004` reach mac via the patch series but are VAAPI-only, so they change nothing on it; `0005` is `fftools` argument parsing and *would* apply. Not enough to be worth a target nobody here runs. |
 | `debian-{bullseye,bookworm,trixie}-{amd64,arm64}` | no | **nothing** |
 | `ubuntu-{jammy,noble,resolute}-{amd64,arm64}` | no | **nothing** |
 
-Only `0001`/`0002` appear in that table. `0003`/`0004` go into the ffmpeg patch series, so they
-reach every target every build system produces, including the `.deb` and mac builds this repo does
-not make.
+Only `0001`/`0002` appear in that table. `0003`/`0004`/`0005` go into the ffmpeg patch series, so
+they reach every target every build system produces, including the `.deb` and mac builds this repo
+does not make.
 
 **The 12 `.deb` packages are the one real gap.** They come from a third build system
 (`Dockerfile.in` + `docker-build.sh`) with its own nv-codec-headers pin that neither pin patch
@@ -82,7 +84,7 @@ touches. So this repo publishes no `.deb`, and installing jellyfin-ffmpeg from a
 stock, without `-tune uhq`.
 
 Adding `.deb` here needs a third pin patch. Without one the packages ship the old headers and
-nothing says so. `0003`/`0004` need no such duplicate.
+nothing says so. `0003`/`0004`/`0005` need no such duplicate.
 
 ## Layout
 
@@ -189,10 +191,12 @@ them.
 Retiring one means deleting its `checks/NNNN.checks` and its `docs/patches/NNNN-*.md` too — see
 [Retiring a patch](docs/verification-gate.md#retiring-a-patch).
 
-**`0003` and `0004` are the fragile pair on a new upstream release.** Their series hunks' context is
-the tail of `debian/patches/series`, so a new upstream patch appended there makes `git apply` fail
-rather than misorder — the safe direction, and the same loud signal a bumped upstream pin gives
-`0001`/`0002`. `0004` additionally depends on `0003` having run; both docs say so.
+**What a new upstream release can still break.** The source patches no longer touch
+`debian/patches/series` — they only create `debian/patches/09xx-*.patch`, and the build step appends
+the lines — so upstream growing the series no longer breaks anything, and the patches are
+independent of each other. What remains is ordinary context drift: if upstream edits one of the
+files a patch's *code* hunks touch, `git apply` fails loudly, the same signal a bumped upstream pin
+gives `0001`/`0002`.
 
 ## Testing a change without waiting 2.5 hours
 

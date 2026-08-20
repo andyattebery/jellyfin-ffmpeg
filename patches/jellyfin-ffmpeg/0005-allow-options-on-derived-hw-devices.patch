@@ -1,0 +1,76 @@
+diff --git a/debian/patches/0902-allow-options-on-derived-hw-devices.patch b/debian/patches/0902-allow-options-on-derived-hw-devices.patch
+new file mode 100644
+--- /dev/null
++++ b/debian/patches/0902-allow-options-on-derived-hw-devices.patch
+@@ -0,0 +1,71 @@
++Allow options on a derived hardware device.
++
++-init_hw_device <type>=<name>@<source> cannot carry device options. The '@'
++branch of hw_device_init_from_string() hands the entire remainder of the string
++to hw_device_get_by_name(), so a comma and everything after it become part of
++the source device name:
++
++    -init_hw_device vulkan=vk@dr,disable_multiplane=1
++    Invalid device specification "vulkan=vk@dr,disable_multiplane=1":
++        invalid source device name
++
++That reads like a typo and is not one -- it looked for a device literally named
++"dr,disable_multiplane=1". No separator helps, because the branch never parses
++options at all: it calls av_hwdevice_ctx_create_derived(), which takes no
++AVDictionary. av_hwdevice_ctx_create_derived_opts() does, and the ':' branch a
++few lines above already contains exactly the parsing this needs.
++
++THIS AFFECTS EVERY DEVICE OPTION ON A DERIVED DEVICE, not one in particular.
++Vulkan's disable_multiplane is merely the one that exposed it: it is honoured on
++a derived device -- vulkan_device_derive() forwards opts, and its DRM case
++passes the function argument as 0 so the dictionary value wins -- yet there is
++no command line that can set it.
++
++The source device name and the options are freed at the function's existing
++done: label, so no new cleanup is introduced. Without a comma the behaviour is
++byte-identical to before: options stays NULL and the call is equivalent to the
++one it replaces.
++
++Full rationale, and what this does and does not buy:
++docs/patches/0005-allow-options-on-derived-hw-devices.md in the build-recipe
++repo.
++
++Index: FFmpeg/fftools/ffmpeg_hw.c
++===================================================================
++--- FFmpeg.orig/fftools/ffmpeg_hw.c
+++++ FFmpeg/fftools/ffmpeg_hw.c
++@@ -178,16 +178,30 @@
++             goto fail;
++ 
++     } else if (*p == '@') {
++-        // Derive from existing device.
+++        // Derive from an existing device, optionally with options.
+++        ++p;
+++        q = strchr(p, ',');
+++        if (q) {
+++            device = av_strndup(p, q - p);
+++            if (!device) {
+++                err = AVERROR(ENOMEM);
+++                goto fail;
+++            }
+++            err = av_dict_parse_string(&options, q + 1, "=", ",", 0);
+++            if (err < 0) {
+++                errmsg = "failed to parse options";
+++                goto invalid;
+++            }
+++        }
++ 
++-        src = hw_device_get_by_name(p + 1);
+++        src = hw_device_get_by_name(q ? device : p);
++         if (!src) {
++             errmsg = "invalid source device name";
++             goto invalid;
++         }
++ 
++-        err = av_hwdevice_ctx_create_derived(&device_ref, type,
++-                                             src->device_ref, 0);
+++        err = av_hwdevice_ctx_create_derived_opts(&device_ref, type,
+++                                                  src->device_ref, options, 0);
++         if (err < 0)
++             goto fail;
++     } else if (*p == ',') {

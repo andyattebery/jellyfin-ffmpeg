@@ -1,0 +1,22 @@
+# 0005 — options on a derived hardware device.
+#
+# Not gateable, and this file is the declaration of that rather than an absence someone has to
+# notice. The patch changes how fftools parses -init_hw_device: it lets the '@' derived form carry
+# device options. That is CLI argument handling, so it appears in neither of the two things this
+# gate can read — it is not an AVOption on an encoder and it is not a filter. `-h encoder=` and
+# `-filters` are both blind to it.
+#
+# It IS provable from a binary, just not by this gate: run
+#
+#     ffmpeg -init_hw_device drm=dr:/dev/dri/renderD128 \
+#            -init_hw_device vulkan=vk@dr,disable_multiplane=1 \
+#            -f lavfi -i nullsrc -frames:v 1 -f null -
+#
+# which fails with "invalid source device name" before the patch and succeeds after. That needs a
+# real DRM render node, which a GPU-less runner does not have.
+#
+# Do not "fix" this by grepping the help output for a string. Nothing the patch adds appears there,
+# so any such check would pass on an unpatched binary — worse than no check, because it converts an
+# honest gap into a false claim of coverage.
+
+ungateable  all  fftools -init_hw_device argument parsing appears in neither -h encoder= nor -filters; proving it needs a real DRM render node, which a GPU-less runner does not have

@@ -15,6 +15,7 @@ the doc is the thing to fix.
 | [0002 — nv-codec-headers pin, windows](patches/0002-nv-codec-headers-windows.md) | `win64`, `winarm64` | shipping, gated |
 | [0003 — VAAPI import of alpha 10-bit RGB DRM formats](patches/0003-vaapi-alpha-10bit-rgb.md) | all targets | shipping, verified on hardware; not gateable |
 | [0004 — Dolby Vision RPU passthrough for hevc_vaapi](patches/0004-dolby-vision-hevc-vaapi.md) | all targets, linux-only feature | shipping, verified on hardware |
+| [0005 — options on a derived hardware device](patches/0005-allow-options-on-derived-hw-devices.md) | all targets | shipping, verified on hardware; not gateable |
 
 Adding a patch means adding a doc here and a `checks/NNNN.checks` declaration. Both are enforced by
 the gate — see below.
