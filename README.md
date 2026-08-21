@@ -31,7 +31,7 @@ both `tonemap_cuda` and `-tune uhq`:
 | BtbN / vanilla FFmpeg builds | no — it's a jellyfin patch | yes |
 | **this** | yes | yes |
 
-`tonemap_cuda` is one of jellyfin's own 97 patches, so no vanilla build has it. `-tune uhq` needs
+`tonemap_cuda` is one of jellyfin's own patches (98 of them at `v8.1.2-3`), so no vanilla build has it. `-tune uhq` needs
 nv-codec-headers newer than the one jellyfin pins. See
 [the nv-codec-headers pin](docs/nv-codec-headers-pin.md) for why upstream pins low and this repo
 does not.
@@ -220,10 +220,6 @@ git apply patches/jellyfin-ffmpeg/*.patch         # in a throwaway upstream chec
 `checks.yaml` runs the first three on every push and pull request, so a patch added without its
 declaration or its doc, or a gate that stopped working, fails in about 20 seconds rather than at the
 next upstream release.
-
-**Use a real `git apply`, not `--check`.** `--check` evaluates every patch against the pristine tree,
-so `0004`'s series hunk cannot see the line `0003` adds and it reports a failure that is not real. A
-real apply is cumulative and succeeds.
 
 `verify-binary.sh --self-test` is the one to reach for after touching anything about the gate. It
 builds stub `ffmpeg` binaries in a temp directory and runs the real script against them, so it

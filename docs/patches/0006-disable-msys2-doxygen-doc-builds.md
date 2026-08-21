@@ -52,8 +52,8 @@ Nothing here consumes opus, xz or libtheora API documentation. The portable arti
 binaries; these docs were built and then thrown away. Even with a fixed doxygen the patch is worth
 keeping for build time alone.
 
-The better end state is upstream not building them either, which is worth proposing — this patch is
-a workaround in someone else's file, and that is the only real argument for retiring it.
+It retires only if upstream stops building these docs of its own accord. This repo does not send
+patches upstream, so that is something to notice if it happens, not something to pursue.
 
 ## Gotchas
 

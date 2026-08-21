@@ -51,14 +51,10 @@ done
 ln -s debian/patches patches      # quilt looks for patches/ at the tree root, as builder/build.sh:64 does
 ```
 
-Apply the recipe patches with a **real** `git apply`, not `--check`. `git apply --check *.patch`
-evaluates every patch against the pristine tree, so `0004`'s series hunk cannot see the line `0003`
-adds and reports a false failure. A real apply is cumulative and succeeds.
-
 Then push the ffmpeg patch series itself (inside the container, step 3):
 
 ```bash
-quilt push -a          # 99 patches
+quilt push -a          # 101 at v8.1.2-3: upstream's 98 plus this repo's 3
 ```
 
 The series is not optional. Several things this fork relies on live there — `vf_libplacebo`
