@@ -32,6 +32,7 @@ This wires `hevc_vaapi` to the existing DOVI code, following `libx265.c`.
 | `dolbyvision` | boolean tri-state | `auto` | emit the RPU and the DV configuration record |
 | `dv_l5` | `keep` / `zero` / `scale` | `keep` | how to handle the level 5 (active area) metadata |
 | `dv_l5_canvas` | image_size | unset | the frame size the source L5 offsets refer to; required by `dv_l5=scale` |
+| `-strict unofficial` | global | — | **not an encoder option, but required for MP4 output.** Without it `movenc` omits the `dvcC`/`dvvC` box and the file plays as plain HDR10 no matter what the encoder emitted. Matroska needs no flag. |
 
 ### ⚠ `-dolbyvision 1` is required in practice
 
@@ -41,6 +42,22 @@ input, so this is FFmpeg's plumbing rather than anything specific to VAAPI.
 
 The encoder says so: a frame carrying DV metadata while no profile is active warns once that Dolby
 Vision is being dropped and that `-dolbyvision 1` enables it.
+
+### ⚠ `-strict unofficial` is required for MP4, and its absence looks like an encoder bug
+
+The encoder's job ends at the elementary stream. Signalling DV in MP4 is the muxer's, and `movenc`
+refuses unless `strict_std_compliance` is at or below `unofficial` — DV in ISOBMFF is not in the base
+spec. Skip the flag and you get a correct DV bitstream in a container that never says so; a player
+sees HDR10 and is right to.
+
+This has already cost one round of device testing: a set of clips was taken to an iPad, badged HDR
+rather than DV, and the conclusion drawn was that the *player* lacked DV support. The clips had been
+muxed without the flag.
+
+`movenc` **does** warn — *"Not writing 'dvcC'/'dvvC' box. Requires -strict unofficial."* — so it is
+in the log, just easy to lose among the muxer's other output. There is deliberately no encoder-side
+warning: the encoder cannot know which muxer it is feeding, so the check would fire on every correct
+Matroska encode.
 
 ### `dv_l5` and letterboxing
 
@@ -142,6 +159,51 @@ case checked by reading the output RPU with `dovi_tool`:
 The L5 functions were additionally unit-tested by extracting them verbatim and running them against
 metadata built with `av_dovi_metadata_alloc()`.
 
+## Ext-block ordering diverges from `dovi_tool` — measured, and fully explained
+
+The RPU diff above is zero across `rpu_data_header` and `rpu_data_mapping`, but the extension blocks
+come out in a different order. Measured on a P8.1 source, frame 0, both sides read back with the same
+`dovi_tool` build (2.3.3):
+
+| | ext-block sequence |
+|---|---|
+| source RPU | `L1 L2 L5 L6` |
+| encoder output | `L6 L1 L2 L5` |
+
+Same set of blocks, **zero per-level content differences** — only the sequence moves, and L6 moves to
+the front.
+
+**Cause: FFmpeg does not hold a flat ext-block list.** `DOVIExt` (`dovi_rpu.h:35-40`) keeps two
+arrays, `dm_static[7]` and `dm_dynamic[25]`. The decoder parses blocks in bitstream order, bins each
+one, then flattens **all static blocks first, then all dynamic** into `AVDOVIMetadata`
+(`dovi_rpudec.c:51-57`). `ff_dovi_rpu_extension_is_static()` (`dovi_rpu.h:197`) calls levels
+**6, 10, 32, 254 and 255** static; L1, L2 and L5 are dynamic. The encoder then writes the array in
+order (`dovi_rpuenc.c:835`, `:845`). L6 leading is that binning and nothing else.
+
+**It is not this patch.** `vaapi_encode_h265_dovi_fixup()` scans the block list twice read-only and
+edits L5 in place; it never inserts, removes or sorts.
+
+**The split is functional, not cosmetic.** It is how FFmpeg implements DM metadata compression:
+static blocks are dropped from later frames when unchanged (`try_reuse_ext()`, and the
+`dm_compression && ff_dovi_rpu_extension_is_static(...)` skip in both write loops). The
+static/dynamic distinction is the spec's own — `dovi_rpu.h` marks level 32 "reserved as static by
+spec".
+
+Order is also not how either implementation reads these blocks back: FFmpeg looks them up with
+`av_dovi_find_level()`, a linear search by level (`dovi_meta.c:67-76`), and libdovi with
+`level_blocks_iter(level)` / `get_block(level)` (`vdr_dm_data.rs:289-310`).
+
+**Correction to an earlier explanation.** This was previously attributed to `dovi_tool` normalising
+order via libdovi's `sort_key()`. That is wrong. Both sequences in the table above were produced by
+`dovi_tool`, so on the read path `dovi_tool` preserves bitstream order and `sort_key()` is not
+applied. The reordering is FFmpeg's, it happens on the **decode** side, and it is deterministic.
+
+**The gap, stated plainly:** the Dolby specification is not public, so "static blocks may lead" is
+inferred from two independent implementations indexing by level, not read from the spec. And **no
+Dolby Vision renderer has parsed these blocks** — the device test that could have cleared it produced
+files that never declared DV in the container (see `-strict unofficial` above), so it exercised HDR10
+playback and nothing about the RPU. One playback on a DV display settles it.
+
 ## Not covered
 
 - **Only `hevc_vaapi`.** `av1_vaapi` would need the T.35 wrapping path; `h264_vaapi` has no DV
@@ -165,11 +227,8 @@ metadata built with `av_dovi_metadata_alloc()`.
 - **The MEL branch preserves a mapping only in principle.** All three MEL sources screened already
   carry the identity mapping, so "reset" and "leave alone" emit identical bytes on them. The branch
   is proven to *detect* correctly — the log names the EL type — but not to *preserve* a non-identity
-  MEL mapping, because no such source was found. Three of thirty-three is too small to conclude MEL
+  MEL mapping, because no such source was found. Three of forty-three is too small to conclude MEL
   mappings are always identity.
-- **Ext-block ordering differs from `dovi_tool`** — it emits `L1,L2,L2,L2,L4,L5,L6`, the encoder puts
-  L6 first, with identical values. Whether the spec constrains block order, or any player cares, is
-  **unchecked**; treat it as a known difference rather than a known-benign one.
 - `avctx->framerate` drives the DV level calculation, as in libx265 — an unset framerate gives a
   level derived from 0 fps. Pass `-r` if it matters.
 
