@@ -17,9 +17,14 @@ the doc is the thing to fix.
 | [0004 — Dolby Vision RPU passthrough for hevc_vaapi](patches/0004-dolby-vision-hevc-vaapi.md) | all targets, linux-only feature | shipping, verified on hardware |
 | [0005 — options on a derived hardware device](patches/0005-allow-options-on-derived-hw-devices.md) | all targets | shipping, verified on hardware; not gateable |
 | [0006 — stop the msys2 packages building doxygen docs](patches/0006-disable-msys2-doxygen-doc-builds.md) | `win64`, `winarm64` | shipping, works around a toolchain crash; not gateable |
+| [0007 — Dolby Vision RPU passthrough for hevc_nvenc](patches/0007-dolby-vision-hevc-nvenc.md) | all targets | shipping, verified on hardware; **requires 0004** |
 
 Adding a patch means adding a doc here and a `checks/NNNN.checks` declaration. Both are enforced by
 the gate — see below.
+
+The patches are independent apart from one pair: `0007` moves `0004`'s Dolby Vision profile 8.1
+conversion into a shared `libavcodec/dovi_p81.{c,h}`, so it must apply after `0004`. `0004` itself is
+unchanged and still applies alone.
 
 ## Topics
 

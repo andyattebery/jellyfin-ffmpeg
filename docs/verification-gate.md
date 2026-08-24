@@ -47,7 +47,9 @@ failure, not a pass.**
 
 `hevc_vaapi`'s three checks are linux-only, because VAAPI is linux-only in this pipeline — see
 [`0004`](patches/0004-dolby-vision-hevc-vaapi.md). They print `skip` on the two windows jobs rather
-than failing them.
+than failing them. `hevc_nvenc`'s equivalent three from
+[`0007`](patches/0007-dolby-vision-hevc-nvenc.md) are declared `all` and run everywhere, which is why
+a linux run reports more `ok` lines than a windows one.
 
 ## Where it runs
 
@@ -77,7 +79,13 @@ Writing the checks file:
 
 - Pick the platform honestly: `linux`, `windows`, or `all`. A patch to `builder/scripts.d` is
   `linux`; one to `msys2/PKGBUILD` is `windows`; one that adds to `debian/patches/series` is `all`
-  unless the *feature* is platform-bound, as `0004`'s is.
+  unless the *feature* is platform-bound, as `0004`'s is. `0007` is the counterexample worth reading
+  next to it: also a source patch, but NVENC is built for all four targets, so it declares `all`.
+  The file a patch touches does not decide this — the feature does.
+
+  ⚠ `0001.checks` argues against `all` in strong terms, and that argument is about `0001`/`0002`
+  being two patches pinning two independent *build systems*, where one declaration each keeps them
+  attributable. It does not transfer to a single source patch that every build system compiles.
 - If it cannot be proven by asking ffmpeg to describe itself, say so: `ungateable  all  <why>`. An
   empty reason is rejected.
 - Run `.github/scripts/verify-binary.sh --self-test` and `--list`. One second, no build.

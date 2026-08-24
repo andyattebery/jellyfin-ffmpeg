@@ -13,13 +13,14 @@ own `builder/` directory is derived from.
 
 ## What the patches buy
 
-Four independent things. Any one is reason enough to keep the recipe, and they retire separately.
+Four things. Any one is reason enough to keep the recipe. They retire separately, with one
+exception: `0007` builds on `0004`, so retiring `0004` means dealing with `0007` too.
 
 | | |
 |---|---|
 | [0001](docs/patches/0001-nv-codec-headers-linux.md) / [0002](docs/patches/0002-nv-codec-headers-windows.md) | `-tune uhq`, `-tf_level`, `-lookahead_level` and `-split_encode_mode` on NVENC, across all four targets |
 | [0003](docs/patches/0003-vaapi-alpha-10bit-rgb.md) | 10-bit VAAPI↔Vulkan tonemapping at the speed of the 8-bit path |
-| [0004](docs/patches/0004-dolby-vision-hevc-vaapi.md) | Dolby Vision surviving a hardware HEVC encode, in one pass |
+| [0004](docs/patches/0004-dolby-vision-hevc-vaapi.md) / [0007](docs/patches/0007-dolby-vision-hevc-nvenc.md) | Dolby Vision surviving a hardware HEVC encode, in one pass — `hevc_vaapi` and `hevc_nvenc` |
 | [0005](docs/patches/0005-allow-options-on-derived-hw-devices.md) | device options reaching a *derived* hardware device from the command line at all |
 
 The NVENC options are what make this binary different from every published one — nothing else ships
@@ -48,14 +49,20 @@ does not.
 | [0004](docs/patches/0004-dolby-vision-hevc-vaapi.md) | Dolby Vision RPU passthrough for `hevc_vaapi` | all targets, linux-only feature | shipping, verified on hardware |
 | [0005](docs/patches/0005-allow-options-on-derived-hw-devices.md) | options on a derived hardware device (`-init_hw_device …@src,opt=val`) | all targets | shipping, verified on hardware; not gateable |
 | [0006](docs/patches/0006-disable-msys2-doxygen-doc-builds.md) | stop the msys2 packages building doxygen docs | `win64` + `winarm64` | shipping, works around a toolchain crash; not gateable |
+| [0007](docs/patches/0007-dolby-vision-hevc-nvenc.md) | Dolby Vision RPU passthrough for `hevc_nvenc`; moves `0004`'s profile 8.1 conversion into a shared file | all targets | shipping, verified on hardware; **needs `0004`** |
 
 **The docs are canonical**; this table is an index.
 
 The two kinds behave differently. `0001`/`0002`/`0006` patch *build systems*, so each covers only
 the targets its build system produces — which is why one nv-codec-headers pin takes two patches,
-`0001` for `builder/` and `0002` for `msys2/`. `0003`/`0004`/`0005` patch the *ffmpeg source*, by
-adding to jellyfin-ffmpeg's own `debian/patches/` series that every build system applies, so one
+`0001` for `builder/` and `0002` for `msys2/`. `0003`/`0004`/`0005`/`0007` patch the *ffmpeg source*,
+by adding to jellyfin-ffmpeg's own `debian/patches/` series that every build system applies, so one
 patch covers every target.
+
+Covering every target is not the same as *working* on every target. `0004`'s feature is VAAPI, which
+is linux-only here, so its checks declare `linux` and skip on windows. `0007`'s is NVENC, which is
+built for all four, so its checks declare `all` — same kind of patch, opposite platform answer,
+decided by the feature rather than by the file it patches.
 
 Not every build-system patch adds a feature: `0006` removes a documentation build that was crashing
 the winarm64 job, and changes nothing about the binary.
@@ -75,13 +82,13 @@ Upstream produces **18 artifacts**. This repo builds **4**.
 | `linux-arm64-portable` | **yes** | [0001](docs/patches/0001-nv-codec-headers-linux.md) — same file covers both linux targets |
 | `win-clang-win64-portable` | **yes** | [0002](docs/patches/0002-nv-codec-headers-windows.md) |
 | `win-clang-winarm64-portable` | **yes** | [0002](docs/patches/0002-nv-codec-headers-windows.md) — same dir covers both windows targets |
-| `mac-x86_64-portable`, `mac-arm64-portable` | no | `50-ffnvcodec.sh:7` returns -1 for `mac*`, so ffnvcodec is off there entirely — `0001`/`0002` buy nothing there. `0003`/`0004` reach mac via the patch series but are VAAPI-only, so they change nothing on it; `0005` is `fftools` argument parsing and *would* apply. Not enough to be worth a target nobody here runs. |
+| `mac-x86_64-portable`, `mac-arm64-portable` | no | `50-ffnvcodec.sh:7` returns -1 for `mac*`, so ffnvcodec is off there entirely — `0001`/`0002` buy nothing there, and `0007` compiles to nothing because `hevc_nvenc` is not built. `0003`/`0004` reach mac via the patch series but are VAAPI-only, so they change nothing on it; `0005` is `fftools` argument parsing and *would* apply. Not enough to be worth a target nobody here runs. |
 | `debian-{bullseye,bookworm,trixie}-{amd64,arm64}` | no | **nothing** |
 | `ubuntu-{jammy,noble,resolute}-{amd64,arm64}` | no | **nothing** |
 
 Only `0001`/`0002` appear in that table, because they are the ones that give an artifact its value.
-`0003`/`0004`/`0005` go into the ffmpeg patch series, so they reach every target every build system
-produces, including the `.deb` and mac builds this repo does not make. `0006` is absent for the
+`0003`/`0004`/`0005`/`0007` go into the ffmpeg patch series, so they reach every target every build
+system produces, including the `.deb` and mac builds this repo does not make. `0006` is absent for the
 opposite reason: it is msys2-only and adds no capability, having removed a documentation build that
 was crashing the winarm64 job.
 
@@ -91,7 +98,8 @@ touches. So this repo publishes no `.deb`, and installing jellyfin-ffmpeg from a
 stock, without `-tune uhq`.
 
 Adding `.deb` here needs a third pin patch. Without one the packages ship the old headers and
-nothing says so. `0003`/`0004`/`0005` need no such duplicate.
+nothing says so. `0003`/`0004`/`0005`/`0007` need no such duplicate — they patch the ffmpeg source,
+which every build system applies.
 
 ## Layout
 
@@ -191,17 +199,21 @@ Deployment globs are unambiguous between architectures and `--self-test` pins th
 
 ## Retiring a patch
 
-Each patch retires on its own condition, and they are independent — the header pin going away does
-not retire the repo. The conditions live in each patch's doc; [the table above](#the-patches) links
-them.
+Each patch retires on its own condition — the header pin going away does not retire the repo. The
+conditions live in each patch's doc; [the table above](#the-patches) links them.
+
+**One dependency exists.** `0007` moves `0004`'s Dolby Vision profile 8.1 conversion into a shared
+`libavcodec/dovi_p81.{c,h}` and rewrites `0004`'s copy into calls to it, so the two must apply in
+order and `0007` cannot be applied without `0004`. The reverse is not true: `0004` is unchanged by
+`0007` and still applies alone. Retiring `0004` therefore means retiring or reworking `0007` first.
 
 Retiring one means deleting its `checks/NNNN.checks` and its `docs/patches/NNNN-*.md` too — see
 [Retiring a patch](docs/verification-gate.md#retiring-a-patch).
 
 **What a new upstream release can still break.** The source patches no longer touch
 `debian/patches/series` — they only create `debian/patches/09xx-*.patch`, and the build step appends
-the lines — so upstream growing the series no longer breaks anything, and the patches are
-independent of each other. What remains is ordinary context drift: if upstream edits one of the
+the lines — so upstream growing the series no longer breaks anything, and no patch depends on
+another's series line. What remains is ordinary context drift: if upstream edits one of the
 files a patch's *code* hunks touch, `git apply` fails loudly, the same signal a bumped upstream pin
 gives `0001`/`0002`.
 
