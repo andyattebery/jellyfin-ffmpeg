@@ -1,0 +1,24 @@
+# 0007 — Dolby Vision RPU passthrough for the hevc_nvenc encoder.
+#
+# PLATFORM `all`, unlike 0004. NVENC is built on every target: builder/scripts.d/50-ffnvcodec.sh
+# emits --enable-nvenc, and its own header says the single linux pin "covers BOTH linux targets"
+# because builder/build.sh:27 sources scripts.d/ whatever $TARGET is; msys2/ covers the two windows
+# jobs. So hevc_nvenc exists in all four build artifacts and all four must carry these options.
+#
+# ⚠ 0001.checks argues the opposite and it does NOT apply here. It says "Do NOT collapse the two
+# files into one `all`" -- but that is about 0001 and 0002 being two SEPARATE patches pinning two
+# SEPARATE build systems, where one declaration each is what keeps them independently attributable.
+# 0007 is a single patch in libavcodec that both build systems compile from the same source. The
+# precedent that fits is `filter all tonemap_cuda`, an NVIDIA-dependent assertion already declared
+# `all` in this repo.
+#
+# These three assertions prove registration: the options exist in the encoder's static AVOption
+# table, so the patch applied and compiled in. They cannot prove the RPU is correct -- that needs a
+# GPU and a Dolby Vision source, and lives in the patch header's verification record instead.
+#
+# The dv_l5 pair is declared by FF_DOVI_P81_L5_OPTIONS() in libavcodec/dovi_p81.h, shared with
+# hevc_vaapi. If these names ever drift from 0004's, the macro is the thing that broke.
+
+encoder-option  all  hevc_nvenc  dolbyvision
+encoder-option  all  hevc_nvenc  dv_l5
+encoder-option  all  hevc_nvenc  dv_l5_canvas

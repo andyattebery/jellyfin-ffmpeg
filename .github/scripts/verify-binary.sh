@@ -533,6 +533,10 @@ case "$want" in
     echo "  -split_encode_mode <int>        E..V....... Specifies the split encoding mode"
     echo "  -tune              <int>        E..V....... Set the encoding tuning info (default none)"
     [ "$flavour" = no-uhq ] || echo "     uhq             4            E..V....... Ultra high quality"
+    # Declared by 0007, on every platform -- NVENC is built for all four targets.
+    echo "  -dolbyvision       <boolean>    E..V....... Enable Dolby Vision RPU coding (default auto)"
+    echo "  -dv_l5             <int>        E..V....... Dolby Vision L5 (active area) handling (default keep)"
+    echo "  -dv_l5_canvas      <image_size> E..V....... Frame size the source Dolby Vision L5 offsets refer to"
     exit 0 ;;
   hevc_vaapi)
     # ffmpeg exits 0 for an unknown encoder; the stub reproduces that faithfully, because the
@@ -575,8 +579,8 @@ self_test_e2e() {
   # THE GREEN PATH. Nothing else in this file proves the gate can pass.
   make_stub "$tmp/good" ffmpeg     good
   make_stub "$tmp/good" ffmpeg.exe good
-  ok "a complete linux binary passes"   "$(run_stub "$tmp/good/ffmpeg")"     "0 |   all 8 checks passed for $tmp/good/ffmpeg (linux)"
-  ok "a complete windows binary passes" "$(run_stub "$tmp/good/ffmpeg.exe")" "0 |   all 5 checks passed for $tmp/good/ffmpeg.exe (windows)"
+  ok "a complete linux binary passes"   "$(run_stub "$tmp/good/ffmpeg")"     "0 |   all 11 checks passed for $tmp/good/ffmpeg (linux)"
+  ok "a complete windows binary passes" "$(run_stub "$tmp/good/ffmpeg.exe")" "0 |   all 8 checks passed for $tmp/good/ffmpeg.exe (windows)"
 
   # VAAPI gone from a LINUX build must be a hard failure, never a skip.
   make_stub "$tmp/novaapi" ffmpeg     no-vaapi
@@ -591,7 +595,7 @@ self_test_e2e() {
   # If this ever fails, every publish is blocked and it costs 2.5h to find out.
   ok "windows build without hevc_vaapi still passes" \
      "$(run_stub "$tmp/novaapi/ffmpeg.exe")" \
-     "0 |   all 5 checks passed for $tmp/novaapi/ffmpeg.exe (windows)"
+     "0 |   all 8 checks passed for $tmp/novaapi/ffmpeg.exe (windows)"
 
   # Single-feature regressions, one per declaration source, so a passing run means something.
   make_stub "$tmp/nouhq" ffmpeg no-uhq

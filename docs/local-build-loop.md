@@ -17,7 +17,29 @@ not compare timings between the two without saying so.
 |---|---|
 | a Linux host with the target GPU | the code paths worth debugging here are driver paths; a GPU-less runner cannot exercise them |
 | podman or docker | the host does not need a toolchain, and on an atomic distro it cannot have one |
-| a base container image carrying **the driver under test** | build *and* run in the same image, so there is never a question of which driver the binary saw |
+| a base container image carrying **the driver under test** | VAAPI only — see the track table |
+
+## Pick your track
+
+The skeleton below is the same either way. Four things differ, and picking the wrong set wastes a
+build:
+
+| | **VAAPI / AMD** | **NVENC / NVIDIA** |
+|---|---|---|
+| base image | must carry **the Mesa/libva under test** — that is the point of the loop | any sane distro base; the driver is **not** in the image |
+| how the GPU gets in | `--device /dev/dri` | CDI: `--device nvidia.com/gpu=all` (docker) |
+| extra build deps | Vulkan headers + libplacebo from source (the two expensive steps below) | **nv-codec-headers only** — skip both |
+| configure | `--enable-vaapi --enable-vulkan --enable-libplacebo --enable-libdrm` | `--enable-ffnvcodec --enable-cuda --enable-nvenc --enable-nvdec --enable-cuvid` |
+
+⚠ **"Build and run in the same image" means something different on each.** On VAAPI the driver under
+test *is* the base image, which is the whole reason for the rule. On NVIDIA the driver libraries are
+injected from the host at run time by CDI, so the base image does not determine which driver the
+binary sees — **the host does**. Same conclusion (one host, one image), different mechanism: if you
+need a specific NVIDIA driver, change the host, not the `FROM` line.
+
+Both tracks can be enabled at once, and sometimes must be. If you are touching code shared between
+the two encoders, build **both** even on a host that can only run one — otherwise half the change
+compiles and the other half is discovered by CI.
 
 Set these once:
 
@@ -65,7 +87,8 @@ accepting DRM PRIME, and patch `0038`'s format-map entry that `0003` sits beside
 ```dockerfile
 FROM ${BASE_IMAGE}
 
-# Toolchain and headers only. The runtime .so's are the thing under test and must not move.
+# VAAPI track. Toolchain and headers only -- the runtime .so's are the thing under test
+# and must not move. For the NVENC track see the smaller image further down.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential git quilt yasm pkg-config cmake python3 \
@@ -98,7 +121,40 @@ RUN mkdir -p /opt/placebo && cd /opt/placebo \
 ENTRYPOINT ["/bin/bash"]
 ```
 
-Three things here are not obvious and each costs an hour to rediscover:
+### The NVENC track image
+
+Much smaller: no Vulkan headers, no libplacebo, because `vf_libplacebo` is not on the path being
+debugged. What it does need is **nv-codec-headers at the tag CI pins** — read the commit out of
+`builder/scripts.d/50-ffnvcodec.sh` rather than hardcoding it a second time, exactly as with the
+Vulkan headers below. That file's header also records the **minimum driver version** the pin
+requires; check the host against it before building, because the failure otherwise arrives as a
+runtime encoder error rather than a version complaint.
+
+```dockerfile
+FROM ${BASE_IMAGE}
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential git quilt yasm nasm pkg-config cmake python3 ca-certificates \
+      libva-dev libdrm-dev \
+ && rm -rf /var/lib/apt/lists/*
+RUN git clone -q https://github.com/FFmpeg/nv-codec-headers.git /opt/nvh \
+ && cd /opt/nvh && git checkout -q <SCRIPT_COMMIT from 50-ffnvcodec.sh> \
+ && make install PREFIX=/usr/local
+ENTRYPOINT ["/bin/bash"]
+```
+
+`libva-dev` is in there deliberately even though NVENC does not use it: it is what lets
+`hevc_vaapi` compile on a host with no AMD GPU, which is the only way to check that a change to
+shared code has not broken the other encoder. Compiling it costs seconds; not compiling it means
+finding out from CI.
+
+Confirm the headers are the ones you meant before building ffmpeg:
+
+```bash
+pkg-config --modversion ffnvcodec      # must match the pinned tag
+```
+
+Three things in the VAAPI image are not obvious and each costs an hour to rediscover:
 
 - **`ENTRYPOINT ["/bin/bash"]`.** If the base image has an init system (s6, linuxserver.io style),
   it swallows whatever command you pass and you get a banner instead of output.
@@ -130,6 +186,16 @@ podman run --rm -v "$SCRATCH:/work:z" build-image -c '
   make -j"$(nproc)" && make install
 '
 ```
+
+For the **NVENC track**, swap the four hardware flags:
+
+```
+  --enable-ffnvcodec --enable-cuda --enable-nvenc --enable-nvdec --enable-cuvid \
+  --enable-vaapi --enable-libdrm          # keep, so hevc_vaapi still compiles
+```
+
+`quilt push -a` is still not optional on either track: patches apply to the source regardless of
+which codecs get configured in, and the series is what the fork *is*.
 
 `--disable-autodetect` is where the time goes. Every *internal* codec still builds — hevc, `hwmap`,
 `scale_vaapi`, `psnr`, `framemd5`, matroska — but no external codec library is linked. x265, SVT-AV1
@@ -167,11 +233,24 @@ release binaries and need a `checks/` declaration.
 ## 5. Running against the GPU
 
 ```bash
+# VAAPI track
 podman run --rm --device /dev/dri -v "$SCRATCH:/work:z" build-image -c '
   vainfo | head -3
   /work/out/bin/ffmpeg -filters | grep -E "libplacebo|hwmap"
 '
+
+# NVENC track -- CDI, and no :z (see the SELinux note, which is podman-only)
+docker run --rm --device nvidia.com/gpu=all -v "$SCRATCH:/work" build-image -c '
+  nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
+  /work/out/bin/ffmpeg -hide_banner -h encoder=hevc_nvenc | head -3
+'
 ```
+
+⚠ **Testing a hardware code path requires a hardware decode, not just a hardware encoder.**
+`avctx->pix_fmt` is `AV_PIX_FMT_CUDA` (or `AV_PIX_FMT_D3D11`) **only** when there is a hardware
+frames context. Feed a software-decoded frame and any bug in that branch simply does not occur, and
+the test passes having exercised nothing. Use `-hwaccel cuda -hwaccel_output_format cuda`, or
+`-hwaccel vaapi -hwaccel_output_format vaapi`, deliberately.
 
 Reproduce the known-bad case before trusting any result. If a chain that is supposed to fail does
 not fail, the environment is wrong and every later number is meaningless — and if your *control*
@@ -182,7 +261,11 @@ Use the real filter graph, not a plausible one. Device topology matters: a chain
 device with vaapi and vulkan both derived from it behaves differently from one where vulkan is
 derived from vaapi, and the wrong topology fails several stages before the code you want to reach.
 
-## SELinux (Fedora, RHEL, Bazzite, Silverblue)
+## SELinux — podman on the Fedora family only
+
+**None of this applies to docker on a Debian/Ubuntu host**: there is no `:z`, no `podman unshare`,
+and adding a `:z` there is at best a no-op. If you are on the NVENC track with docker, skip the
+section.
 
 Three separate failures, all reported as permission errors that do not mention SELinux:
 
@@ -200,8 +283,13 @@ container instead, which changes nothing on disk.
 
 - **shared, not static** — it links libplacebo from `/usr/local`; release artifacts bake it in
 - **no external codecs** — by design
-- **not a release artifact** — never install it over a packaged path such as
-  `/opt/jellyfin-ffmpeg/`. It reports the same version string, so anything hashing that string
-  cannot tell the two apart. Install alongside.
+- **not a release artifact** — **never install it over any packaged ffmpeg path.** It reports the
+  same version string as the release build, so anything that hashes that string cannot tell the two
+  apart, and a measurement campaign keyed on it will silently attribute this binary's numbers to the
+  released one. Install alongside, always.
+- **it will not pass the full gate** — `verify-binary.sh` also checks baseline features such as
+  `tonemap_cuda` that `--disable-autodetect` leaves out by design. Expect the per-patch checks to
+  pass and the baseline ones to fail; that is the dev build being a dev build. Hand anyone else a CI
+  release artifact, not this.
 
 Use it to answer questions. Ship the answer as a patch, and let CI build the binary.

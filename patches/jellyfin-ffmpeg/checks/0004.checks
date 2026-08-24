@@ -15,8 +15,11 @@
 # degrade a linux build that lost VAAPI into a silent skip, which is the exact failure this gate
 # exists to catch.
 #
-# The patch is unverified on hardware. What these three assertions prove is registration: the
-# options exist in the encoder's static AVOption table, so the patch applied and compiled in.
+# What these three assertions prove is registration: the options exist in the encoder's static
+# AVOption table, so the patch applied and compiled in. They cannot prove the RPU is correct.
+#
+# (This header used to say "the patch is unverified on hardware". That stopped being true: it was
+# verified on an RX 9070 XT, and the record is in docs/patches/0004-dolby-vision-hevc-vaapi.md.)
 
 encoder-option  linux    hevc_vaapi  dolbyvision
 encoder-option  linux    hevc_vaapi  dv_l5

@@ -190,7 +190,7 @@ static/dynamic distinction is the spec's own — `dovi_rpu.h` marks level 32 "re
 spec".
 
 Order is also not how either implementation reads these blocks back: FFmpeg looks them up with
-`av_dovi_find_level()`, a linear search by level (`dovi_meta.c:67-76`), and libdovi with
+`av_dovi_find_level()`, a linear search by level (`libavutil/dovi_meta.c:67-76`), and libdovi with
 `level_blocks_iter(level)` / `get_block(level)` (`vdr_dm_data.rs:289-310`).
 
 **Correction to an earlier explanation.** This was previously attributed to `dovi_tool` normalising
@@ -243,3 +243,15 @@ playback and nothing about the RPU. One playback on a DV display settles it.
   needed `0003`'s line as context. It no longer patches `debian/patches/series` at all — it only
   creates `debian/patches/0901-*.patch`, and the build step appends the line. Either patch can be
   retired without touching the other.
+- **`0007` depends on this patch, one way.** `0007` adds the same feature to `hevc_nvenc` and, in
+  doing so, moves the profile 8.1 conversion, the FEL/MEL discrimination and the L5 handling out of
+  `vaapi_encode_h265.c` into a shared `libavcodec/dovi_p81.{c,h}`, rewriting this encoder's copy into
+  calls. **This patch is unchanged and still applies alone** — the refactor lives entirely in `0007`,
+  so `0004` without `0007` behaves exactly as described here. But `0007` cannot apply without it, and
+  retiring `0004` now means retiring or reworking `0007` too.
+- **After `0007`, the code described above lives in two places.** The behaviour is identical — `0007`
+  re-verified this encoder's options and defaults after the move — but anyone editing the FEL mapping
+  reset or the L5 rescale should edit `dovi_p81.c`, not this file. Two further things became
+  structural there rather than conventional: the `dv_l5` options come from a shared macro so the two
+  encoders cannot spell them differently, and the `dv_l5=scale` canvas check became a shared function
+  after it turned out to be a division by zero that a second encoder could silently omit.
