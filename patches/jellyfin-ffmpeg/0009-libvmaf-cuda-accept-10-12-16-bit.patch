@@ -1,0 +1,51 @@
+diff --git a/debian/patches/0904-libvmaf-cuda-accept-10-12-16-bit.patch b/debian/patches/0904-libvmaf-cuda-accept-10-12-16-bit.patch
+new file mode 100644
+index 0000000..0c64faf
+--- /dev/null
++++ b/debian/patches/0904-libvmaf-cuda-accept-10-12-16-bit.patch
+@@ -0,0 +1,45 @@
++Accept 10-, 12- and 16-bit input in the libvmaf_cuda filter.
++
++libvmaf_cuda rejected everything except 8-bit yuv420p and yuv444p16, so any
++10-bit source -- which is every HDR and Dolby Vision source this fork exists
++to encode -- died at config time with
++
++    Unsupported input format: yuv420p10le
++    Task finished with error code: -22 (Invalid argument)
++
++Nothing behind that check needed changing. pix_fmt_map() already maps all
++twelve of the CPU filter's formats, including AV_PIX_FMT_YUV420P10LE; bpc is
++read straight off the format with desc->comp[0].depth; the device copy sizes
++itself as w * ((bpc + 7) / 8); and libvmaf's CUDA backend accepts bpc 8-16
++(picture_cuda.c: `if (bpc < 8 || bpc > 16) return -EINVAL;`) with every
++feature extractor parameterised on the actual bpc value. The list was simply
++narrower than the code behind it.
++
++So this makes supported_formats[] match the CPU filter's pix_fmts[] exactly.
++Both lists now cover 4:4:4 / 4:2:2 / 4:2:0 at 8, 10, 12 and 16 bit, which is
++also precisely the set pix_fmt_map() understands.
++
++Semi-planar formats are deliberately NOT added. p010 stores luma MSB-aligned
++(value << 6) while desc->comp[0].depth still reports 10, so libvmaf would read
++it 64x too bright and return a plausible, wrong score rather than an error.
++Feed p010 through scale_cuda=format=yuv420p10 instead.
++
++This depends on the libvmaf motion-stride fix carried by
++builder/scripts.d/55-libvmaf.sh. Without it, 10-bit is accepted and scores
++~1.06 VMAF low -- see docs/patches/0009-libvmaf-cuda-10bit.md.
++
++--- a/libavfilter/vf_libvmaf.c
+++++ b/libavfilter/vf_libvmaf.c
++@@ -633,8 +633,10 @@
++ 
++ #if CONFIG_LIBVMAF_CUDA_FILTER
++ static const enum AVPixelFormat supported_formats[] = {
++-    AV_PIX_FMT_YUV420P,
++-    AV_PIX_FMT_YUV444P16,
+++    AV_PIX_FMT_YUV444P,     AV_PIX_FMT_YUV422P,     AV_PIX_FMT_YUV420P,
+++    AV_PIX_FMT_YUV444P10LE, AV_PIX_FMT_YUV422P10LE, AV_PIX_FMT_YUV420P10LE,
+++    AV_PIX_FMT_YUV444P12LE, AV_PIX_FMT_YUV422P12LE, AV_PIX_FMT_YUV420P12LE,
+++    AV_PIX_FMT_YUV444P16LE, AV_PIX_FMT_YUV422P16LE, AV_PIX_FMT_YUV420P16LE,
++ };
++ 
++ static int format_is_supported(enum AVPixelFormat fmt)

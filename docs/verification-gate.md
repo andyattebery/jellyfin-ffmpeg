@@ -65,6 +65,12 @@ so they `skip` on `linuxarm64` as well as on both windows jobs. The runnable cou
 per target rather than per platform, so a target that ends up with nothing to check is caught here
 rather than by a build.
 
+[`0009`](patches/0009-libvmaf-cuda-10bit.md) uses the fine tier too, but as `ungateable linux64`,
+which is worth understanding as a limit rather than a coverage claim: `ungateable` is handled
+*before* the platform comparison, so it prints `n/a` on all four jobs and the `linux64` records
+where the feature lives rather than restricting anything. It contributes no runnable assertion, so
+nothing in CI would catch that patch regressing — see its doc for what stands in.
+
 ## Where it runs
 
 **It must run on the binary's own platform**, and that is what decides where:
@@ -101,7 +107,7 @@ Writing the checks file:
   being two patches pinning two independent *build systems*, where one declaration each keeps them
   attributable. It does not transfer to a single source patch that every build system compiles.
 - **Reach for the fine tier only when the patch really does build for one target and not its
-  sibling.** `0008` is the only current case: `55-libvmaf.sh` gates on `[[ $TARGET == linux64 ]]`,
+  sibling.** `0008` and `0009` are the current cases: `55-libvmaf.sh` gates on `[[ $TARGET == linux64 ]]`,
   so `linuxarm64` has no libvmaf at all and a `linux` declaration would fail there. Do not use it
   as a way to dodge a check that is merely inconvenient — `linux` remains correct for anything
   `builder/` builds for both linux targets, which is most things.
@@ -129,6 +135,38 @@ than silent, which is the point — but it is two more files than people expect,
 only thing that will remind you.
 
 Each patch doc carries its own retire condition in its header table.
+
+## Scoring: the one thing this gate cannot do
+
+`0008` and `0009` are `ungateable` because a VMAF filter's *correctness* cannot be observed through
+`-h encoder=` or `-filters` — the only way to tell a right score from a wrong one is to compute one,
+and `libvmaf_cuda` needs a CUDA device no GitHub-hosted runner has. `--score` is what stands in:
+
+```bash
+.github/scripts/verify-binary.sh --score /path/to/ffmpeg        # tolerance 0.01
+.github/scripts/verify-binary.sh --score /path/to/ffmpeg 0.001  # stricter
+```
+
+Three things about it are deliberate.
+
+- **It asserts CUDA against the binary's own CPU `libvmaf` filter**, not against a golden number. A
+  hardcoded score would rot the moment the model, the content or libvmaf changed; the two filters
+  have to agree with each other whatever they are computing.
+- **The content is generated, not shipped** — two identical `testsrc2` sources in one graph, one
+  distorted by a scale round-trip. No sample file, no licence question, no temp files, nothing to
+  keep in sync. It lands near 75 VMAF rather than up against the 100 ceiling, where everything
+  looks alike.
+- **It refuses rather than skips.** No GPU, no `libvmaf_cuda`, no score parsed — all exit **2**,
+  distinct from **1** for "ran and disagreed". A skip here would be a vacuous pass of the only check
+  that can catch a wrong number.
+
+Measured discrimination against the [Netflix/vmaf#1566](https://github.com/Netflix/vmaf/issues/1566)
+motion-stride bug, on the generated clip: delta **−0.000046** with the fix, **+24.298661** without.
+The 0.01 tolerance catches that by roughly 2400x.
+
+Run it on a GPU host after any libvmaf bump, and before publishing a release whose libvmaf changed.
+It is not wired into CI — that would need a self-hosted GPU runner, at which point this is the
+command such a job would invoke.
 
 ## Checking a built binary by hand
 

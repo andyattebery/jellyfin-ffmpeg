@@ -618,7 +618,31 @@ jobs:
             echo "Upstream \`${UPSTREAM_TAG}\` built with nv-codec-headers bumped to \`${PIN_NAME}\`,"
             echo "unlocking \`-tune uhq\`, \`-tf_level\`, \`-lookahead_level\` and \`-split_encode_mode\`."
             echo
-            echo "Driver floor is **570.0** — check your driver before installing."
+            echo "Also carries **CUDA-accelerated VMAF** — the \`libvmaf\` and \`libvmaf_cuda\` filters."
+            echo "\`libvmaf_cuda\` is **linux64 only**; the other three assets get neither filter."
+            echo
+            echo "Driver floors — check yours before installing:"
+            echo
+            echo "| | floor |"
+            echo "|---|---|"
+            echo "| NVENC and everything else here | **570.0** |"
+            echo "| \`libvmaf_cuda\` (linux64) | **580**, and a **Turing or newer** GPU |"
+            echo
+            echo "\`libvmaf_cuda\` takes CUDA frames only. 8, 10, 12 and 16 bit are all accepted, so"
+            echo "10-bit HDR and Dolby Vision go in natively:"
+            echo '```'
+            echo "ffmpeg -init_hw_device cuda=cu -filter_hw_device cu -i dis.mkv -i ref.mkv \\"
+            echo "  -lavfi \"[0:v]format=yuv420p10le,hwupload_cuda[d]; \\"
+            echo "          [1:v]format=yuv420p10le,hwupload_cuda[r]; \\"
+            echo "          [d][r]libvmaf_cuda=log_fmt=json:log_path=out.json\" -f null -"
+            echo '```'
+            echo
+            echo "From a CUDA decode the format is \`p010le\` — convert with"
+            echo "\`scale_cuda=format=yuv420p10\` first. **Never feed \`p010\` straight in:** its luma is"
+            echo "MSB-aligned, so it is read 64x too bright and scores wrong without erroring. Likewise"
+            echo "\`scale_cuda=format=yuv420p\` on 10-bit input silently measures the 8-bit projection."
+            echo
+            echo "Scores match the CPU \`libvmaf\` filter to ~0.0001 VMAF at both 8 and 10 bit."
             echo
             echo "Built by checking out \`${UPSTREAM}\` at \`${UPSTREAM_TAG}\` and applying"
             echo "\`patches/jellyfin-ffmpeg/\`. Reproduce with:"

@@ -1,9 +1,9 @@
 diff --git a/builder/scripts.d/55-libvmaf.sh b/builder/scripts.d/55-libvmaf.sh
 new file mode 100755
-index 0000000..6ef4280
+index 0000000..9a3ad26
 --- /dev/null
 +++ b/builder/scripts.d/55-libvmaf.sh
-@@ -0,0 +1,165 @@
+@@ -0,0 +1,198 @@
 +#!/bin/bash
 +
 +SCRIPT_REPO="https://github.com/Netflix/vmaf.git"
@@ -81,6 +81,39 @@ index 0000000..6ef4280
 +    sed -i -E 's/([^.>:_[:alnum:]])swap\(/\1libsvm_swap(/g' libvmaf/src/svm.cpp
 +    sed -i -E 's/([^.>:_[:alnum:]])min\(/\1libsvm_min(/g' libvmaf/src/svm.cpp
 +    sed -i -E 's/([^.>:_[:alnum:]])max\(/\1libsvm_max(/g' libvmaf/src/svm.cpp
++
++    # Netflix/vmaf#1566: the 16bpc motion kernel does uint16_t* pointer arithmetic with
++    # src.stride[0], which is a BYTE stride -- picture_cuda.c sets
++    # `pic->stride[0] = aligned_y << hbd` and cuMemAllocPitch returns byte pitches. So it advances
++    # two image rows per row and reads past the luma plane on the lower half of the frame. The
++    # 8bpc kernel beside it is correct because it does byte arithmetic on uint8_t*, which is why
++    # 8-bit was always right and this went unnoticed.
++    #
++    # Measured here before and after, 5 s of 1080p 10-bit, against the CPU libvmaf filter on the
++    # same pair:  96.902962 -> 97.960604, CPU reference 97.960520. That is +0.000084, the same
++    # accuracy the 8-bit path already had. Only the motion feature was affected; every ADM and VIF
++    # scale matched the CPU exactly both before and after.
++    #
++    # Upstream fix is one line and still unmerged (issue open, no PR), so it is applied here rather
++    # than pinned to. When upstream takes it, this python exits 1 on the assert and the build fails
++    # loudly -- which is the point. A `sed` that silently matched nothing would ship a wrong VMAF,
++    # and a wrong number that looks right is worse than no number.
++    python3 - <<'MOTIONFIX'
++import sys
++p = 'libvmaf/src/feature/cuda/integer_motion/motion_score.cu'
++s = open(p).read()
++old = ("blurred_y += filter_d[yf] * (reinterpret_cast<const uint16_t*>(src.data[0])"
++       " + mirror(y-radius+yf, height) * src.stride[0])[mirror(x-radius+xf, width)];")
++new = ("blurred_y += filter_d[yf] * reinterpret_cast<const uint16_t*>("
++       "reinterpret_cast<const uint8_t*>(src.data[0])"
++       " + mirror(y-radius+yf, height) * src.stride[0])[mirror(x-radius+xf, width)];")
++n = s.count(old)
++if n != 1:
++    sys.exit("Netflix/vmaf#1566 motion-stride fix: expected 1 match, found %d in %s -- "
++             "upstream changed this line. Re-check the fix before shipping 10-bit VMAF." % (n, p))
++open(p, 'w').write(s.replace(old, new, 1))
++print("applied Netflix/vmaf#1566 motion-stride fix")
++MOTIONFIX
 +
 +    # The build directory MUST be libvmaf/build, one level under the source root. The .fatbin
 +    # custom_targets in libvmaf/src/meson.build use relative includes -- `-I ../src`,

@@ -19,6 +19,7 @@ the doc is the thing to fix.
 | [0006 — stop the msys2 packages building doxygen docs](patches/0006-disable-msys2-doxygen-doc-builds.md) | `win64`, `winarm64` | shipping, works around a toolchain crash; not gateable |
 | [0007 — Dolby Vision RPU passthrough for hevc_nvenc](patches/0007-dolby-vision-hevc-nvenc.md) | all targets | shipping, verified on hardware; **requires 0004** |
 | [0008 — CUDA-accelerated VMAF (`libvmaf_cuda`)](patches/0008-cuda-libvmaf.md) | `linux64` only | shipping, gated; scored against the CPU filter on hardware |
+| [0009 — `libvmaf_cuda` accepts 10-, 12- and 16-bit](patches/0009-libvmaf-cuda-10bit.md) | `linux64` only | shipping, ungateable; **requires 0008** |
 
 Adding a patch means adding a doc here and a `checks/NNNN.checks` declaration. Both are enforced by
 the gate — see below.

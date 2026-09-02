@@ -1,0 +1,26 @@
+# 0009 — libvmaf_cuda accepts 10-, 12- and 16-bit input.
+#
+# UNGATEABLE, and by mechanism rather than by preference. What this patch changes is a filter's
+# accepted pixel-format list, and ffmpeg exposes that through neither `-h filter=` nor `-filters`.
+# The only other way to prove it is to run the filter — which needs a real CUDA device, and the
+# build runners have no GPU. `config_props_cuda` dereferences hw_frames_ctx before it ever reaches
+# the format check, so there is not even a way to fail informatively without one.
+#
+# Declared `linux64` to record where the feature lives: 55-libvmaf.sh gates on
+# `[[ $TARGET == linux64 ]]`, so libvmaf_cuda exists on that target alone. Note this is
+# documentation only — verify-binary.sh handles `ungateable` before the platform comparison, so it
+# prints n/a on all four jobs regardless, exactly as 0006's `ungateable windows` does.
+#
+# ⚠ CONSEQUENCE, STATED PLAINLY: nothing in CI will notice if 10-bit support regresses. 0008's two
+# `filter` checks prove libvmaf_cuda is present; nothing proves it is CORRECT. What stands in:
+#
+#   verify-binary.sh --score <binary>      on a GPU host -- scores generated 10- and 8-bit clips
+#                                          and asserts CUDA against the binary's own CPU libvmaf
+#                                          filter. Refuses (exit 2) without a GPU rather than
+#                                          skipping. Discriminates the #1566 motion bug by
+#                                          +24.3 VMAF against a 0.01 tolerance.
+#
+# plus the hard assert in 55-libvmaf.sh that fails the build if the libvmaf motion fix stops
+# applying. Run --score after any libvmaf bump. Wiring it into CI needs a self-hosted GPU runner.
+
+ungateable  linux64  the patch widens vf_libvmaf.c's supported_formats[] list; a filter's accepted pixel formats appear in neither -h encoder= nor -filters, and running libvmaf_cuda to observe them needs a CUDA device the runners do not have

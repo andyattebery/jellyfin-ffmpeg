@@ -3,6 +3,8 @@
 # verify-binary.sh <path to ffmpeg or ffmpeg.exe> [target]
 #                  --self-test          pure-logic assertions plus the repo's own manifests. <1s.
 #                  --list [target]      what would run, and where, without a binary.
+#                  --score <binary>     score generated 10- and 8-bit clips on a real GPU. Needs
+#                                       CUDA; NOT part of the CI gate. See "Scoring" below.
 #
 # Asks ffmpeg whether the built binary carries the features this fork exists for, rather than
 # grepping the binary for strings. `-h encoder=` reads the encoder's static AVOption table and
@@ -50,6 +52,23 @@
 #   4. add a --self-test fixture WITH AT LEAST ONE NEGATIVE CONTROL: a positive-only assertion
 #      proves nothing about a grep
 #   5. document it above
+#
+# Scoring (--score): the one thing this gate CANNOT prove on a CI runner.
+#
+# 0009 widens the pixel formats libvmaf_cuda accepts, and 0008's 55-libvmaf.sh carries a libvmaf
+# motion-kernel fix. Neither is observable through `-h encoder=` or `-filters` -- the only way to
+# tell a correct VMAF from a wrong one is to compute one, and libvmaf_cuda needs a real CUDA device
+# that no GitHub-hosted runner has. So both are declared `ungateable`, and this mode is what stands
+# in: run it by hand on a GPU host after any libvmaf bump.
+#
+# It asserts CUDA against the binary's OWN CPU libvmaf filter, not against a golden number. That is
+# deliberate -- a hardcoded score would rot the moment the model, the content or libvmaf changed,
+# whereas the two filters must agree with each other whatever they are computing.
+#
+# Content is GENERATED, not shipped: two identical testsrc2 sources in one graph, one distorted by
+# a scale round-trip. No sample file, no licence question, no temp files, and nothing to keep in
+# sync. Measured discrimination on the Netflix/vmaf#1566 motion-stride bug: delta -0.000046 with
+# the fix, +24.298661 without it. A 0.01 tolerance catches that by ~2400x.
 #
 # To add a target: add its token to VALID_PLATFORMS and to FINE_PLATFORMS, teach
 # platform_of_target() its coarse platform, add a --self-test fixture with a negative control, and
@@ -120,6 +139,19 @@ has_option() { printf '%s\n' "$1" | grep -qE "^[[:space:]]+-?${2}[[:space:]]"; }
 # -filters lines are " .. tonemap_cuda   V->V   <description>". Anchoring past the flags column
 # stops a match inside another filter's description prose.
 has_filter() { printf '%s\n' "$2" | grep -qE "^[[:space:]]*[.A-Z]+[[:space:]]+${1}[[:space:]]"; }
+
+# Last "VMAF score: N" in ffmpeg's stderr. Last, not first: the filter prints one per model, and a
+# graph with two vmaf instances would print several. Empty output means no score at all, which the
+# caller must treat as a failure rather than as zero.
+parse_vmaf_score() { printf '%s\n' "$1" | grep -oE 'VMAF score: [0-9.]+' | tail -1 | sed 's/^VMAF score: //'; }
+
+# |a - b| <= tol, via awk because bash has no float arithmetic and `bc` is not always installed --
+# it is absent from the sweepbox container, for one. Returns 1 on any non-numeric input rather than
+# treating it as zero, so a missing score cannot pass.
+within_tolerance() {
+  case "$1$2$3" in *[!0-9.]*|'') return 1 ;; esac
+  awk -v a="$1" -v b="$2" -v t="$3" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(d <= t) }'
+}
 
 # Names are interpolated into grep -E, so they may not carry regex metacharacters.
 safe_name() { case "$1" in *[!A-Za-z0-9_]*|'') return 1 ;; *) return 0 ;; esac; }
@@ -380,6 +412,82 @@ list_for() {
 }
 
 # ---------------------------------------------------------------------------------------
+# --score
+# ---------------------------------------------------------------------------------------
+
+SCORE_SRC="testsrc2=s=1280x720:r=30:d=2"
+SCORE_DIS="scale=426x240,scale=1280x720"          # a real distortion, ~75 VMAF -- not near the
+                                                  # 100 ceiling, where everything looks equal
+SCORE_TOL_DEFAULT="0.01"
+
+# One measurement. Prints the score on stdout, nothing else; diagnostics go to stderr.
+run_one_score() {
+  local ff="$1" pixfmt="$2" mode="$3" out hw graph
+  if [ "$mode" = cuda ]; then
+    hw="-init_hw_device cuda=cu -filter_hw_device cu"
+    graph="[0:v]${SCORE_DIS},format=${pixfmt},hwupload_cuda[d];[1:v]format=${pixfmt},hwupload_cuda[r];[d][r]libvmaf_cuda"
+  else
+    hw=""
+    graph="[0:v]${SCORE_DIS},format=${pixfmt}[d];[1:v]format=${pixfmt}[r];[d][r]libvmaf"
+  fi
+  # word-splitting $hw is intentional: it is a flag list, not a path.
+  # shellcheck disable=SC2086
+  out=$("$ff" -nostdin -hide_banner $hw -f lavfi -i "$SCORE_SRC" -f lavfi -i "$SCORE_SRC" \
+        -lavfi "$graph" -f null - 2>&1)
+  printf '%s' "$(parse_vmaf_score "$out")"
+  [ -n "$(parse_vmaf_score "$out")" ] || printf '%s\n' "$out" | tail -4 >&2
+}
+
+score_mode() {
+  local ff="$1" tol="${2:-$SCORE_TOL_DEFAULT}" pixfmt label cpu cuda failed=0
+
+  [ -f "$ff" ] || { echo "::error::not found: $ff"; return 2; }
+  case "$(platform_of "$ff")" in
+    windows) echo "::error::--score needs libvmaf_cuda, which is linux64 only"; return 2 ;;
+  esac
+
+  # Refuse to run rather than report a vacuous pass. Each of these is a different missing thing and
+  # says so, because "no score" and "score is wrong" must never look alike.
+  local filters
+  filters=$("$ff" -hide_banner -filters 2>/dev/null)
+  has_filter libvmaf      "$filters" || { echo "::error::$ff has no libvmaf filter"; return 2; }
+  has_filter libvmaf_cuda "$filters" || { echo "::error::$ff has no libvmaf_cuda filter — is this a linux64 build with 0008 applied?"; return 2; }
+  has_filter hwupload_cuda "$filters" || { echo "::error::$ff has no hwupload_cuda filter"; return 2; }
+  if ! "$ff" -nostdin -hide_banner -init_hw_device cuda=cu -f lavfi -i testsrc2=s=64x64:d=1 \
+       -f null - >/dev/null 2>&1; then
+    echo "::error::no usable CUDA device — --score must run on a GPU host, and a skip here would be"
+    echo "::error::a vacuous pass. This is why 0008/0009 are declared ungateable."
+    return 2
+  fi
+
+  echo "  scoring $ff (tolerance ${tol}, content generated not shipped)"
+  for pixfmt in yuv420p10le yuv420p; do
+    case "$pixfmt" in
+      yuv420p10le) label="10-bit  (0009 + the libvmaf motion fix)" ;;
+      *)           label="8-bit   (0008's original path)" ;;
+    esac
+    cpu=$(run_one_score  "$ff" "$pixfmt" cpu)
+    cuda=$(run_one_score "$ff" "$pixfmt" cuda)
+    if [ -z "$cpu" ] || [ -z "$cuda" ]; then
+      echo "::error::$label: no VMAF score produced (cpu='$cpu' cuda='$cuda')"
+      failed=1
+      continue
+    fi
+    if within_tolerance "$cpu" "$cuda" "$tol"; then
+      printf '  ok    %s  cpu=%s cuda=%s\n' "$label" "$cpu" "$cuda"
+    else
+      printf '::error::%s: cuda=%s but cpu=%s — beyond %s\n' "$label" "$cuda" "$cpu" "$tol"
+      echo "::error::  a wrong VMAF that looks plausible is worse than no VMAF. Do not ship this build."
+      failed=1
+    fi
+  done
+
+  [ "$failed" -eq 0 ] || return 1
+  echo "  both bit depths agree with the CPU filter"
+  return 0
+}
+
+# ---------------------------------------------------------------------------------------
 # --self-test
 # ---------------------------------------------------------------------------------------
 
@@ -461,6 +569,21 @@ Exiting with exit code 0"
   ok "win64 coarse platform"     "$(platform_of_target win64)"      windows
   ok "winarm64 coarse platform"  "$(platform_of_target winarm64)"   windows
   ok "unknown target has no platform" "$(platform_of_target mac64)" ""
+
+  # --score's pure halves. The negative controls are the point: a missing score must never be
+  # readable as 0.0 and then compared as if it were a real measurement.
+  ok "parse last vmaf score"  "$(parse_vmaf_score 'x
+[Parsed_libvmaf_0 @ 0x1] VMAF score: 75.257781')" 75.257781
+  ok "parse picks the LAST"   "$(parse_vmaf_score 'VMAF score: 1.5
+VMAF score: 99.556442')" 99.556442
+  ok "no score parses empty"  "$(parse_vmaf_score 'Conversion failed!')" ""
+  ok_true  "identical scores are within tolerance"  within_tolerance 75.257781 75.257781 0.01
+  ok_true  "the measured fixed delta passes"        within_tolerance 75.257781 75.257735 0.01
+  ok_false "the measured #1566 delta fails"         within_tolerance 75.257781 99.556442 0.01
+  ok_true  "tolerance is symmetric"                 within_tolerance 99.556442 99.556000 0.01
+  ok_false "and symmetric when it fails"            within_tolerance 99.556442 75.257781 0.01
+  ok_false "empty score never passes"               within_tolerance "" 75.257781 0.01
+  ok_false "non-numeric never passes"               within_tolerance "n/a" 75.257781 0.01
   # A typo'd platform must be rejected, not become permanent invisibility.
   ok_true  "known platform accepted"   valid_platform linux
   ok_false "typo'd platform rejected"  valid_platform linix
@@ -779,8 +902,13 @@ case "${1:-}" in
       *)             echo "usage: $0 --list [linux|windows|linux64|linuxarm64|win64|winarm64]" >&2; exit 2 ;;
     esac
     exit 0 ;;
+  --score)
+    [ -n "${2:-}" ] || { echo "usage: $0 --score <ffmpeg binary> [tolerance]" >&2; exit 2; }
+    score_mode "$2" "${3:-}"
+    exit $? ;;
   -h|--help|'')
     echo "usage: $0 <ffmpeg binary> [linux64|linuxarm64|win64|winarm64]" >&2
+    echo "       $0 --score <ffmpeg binary> [tolerance]   # needs a GPU; not part of the CI gate" >&2
     echo "       $0 --self-test | --list [platform|target]" >&2
     exit 2 ;;
 esac

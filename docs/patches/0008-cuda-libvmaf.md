@@ -6,6 +6,7 @@
 | **Covers** | `linux64` **only** — not `linuxarm64`, not the two windows targets |
 | **Retires when** | Upstream jellyfin-ffmpeg adds libvmaf to `builder/scripts.d` itself |
 | **Gate** | `checks/0008.checks` — two `filter` checks, declared `linux64` |
+| **Also carries** | the [Netflix/vmaf#1566](https://github.com/Netflix/vmaf/issues/1566) motion-stride fix, without which 10-bit scores are ~1.06 VMAF low — see [0009](0009-libvmaf-cuda-10bit.md) |
 
 ## What it does
 
@@ -178,25 +179,47 @@ Both lines are load-bearing. `--enable-libvmaf` always produces the CPU `libvmaf
 is `check_pkg_config`, not `require_pkg_config`. The `no-vmafcuda` self-test stub is the negative
 control for that claim.
 
+These prove the filter is *present*, not that it is *correct* — and this patch now also carries a
+libvmaf kernel fix, which no `-filters` check can see. Run
+`verify-binary.sh --score <binary>` on a GPU host for that; see
+[the gate doc](../verification-gate.md).
+
 ## Using it
 
-`libvmaf_cuda` takes CUDA frames only (`vf_libvmaf.c:825`, `FILTER_SINGLE_PIXFMT(AV_PIX_FMT_CUDA)`)
-and supports exactly `AV_PIX_FMT_YUV420P` and `AV_PIX_FMT_YUV444P16` (`:635-637`), so the
-`scale_cuda=format=yuv420p` on both inputs is mandatory, not decorative:
+`libvmaf_cuda` takes CUDA frames only (`vf_libvmaf.c:825`,
+`FILTER_SINGLE_PIXFMT(AV_PIX_FMT_CUDA)`). Which *software* formats it accepts depends on whether
+[0009](0009-libvmaf-cuda-10bit.md) is applied:
+
+- **with 0009** — 4:4:4 / 4:2:2 / 4:2:0 at 8, 10, 12 and 16 bit, so 10-bit HDR and Dolby Vision
+  sources go in natively with no conversion at all.
+- **without it** — 8-bit `yuv420p` and `yuv444p16` only, and everything else fails config with
+  `Unsupported input format: <name>` and `-22`.
+
+Native 10-bit, no `scale_cuda`:
 
 ```bash
-ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i dis.mkv \
-       -hwaccel cuda -hwaccel_output_format cuda -i ref.mkv \
-       -filter_complex "[0:v]scale_cuda=format=yuv420p[dis]; \
-                        [1:v]scale_cuda=format=yuv420p[ref]; \
-                        [dis][ref]libvmaf_cuda=log_fmt=json:log_path=out.json" \
+ffmpeg -init_hw_device cuda=cu -filter_hw_device cu -i dis.mkv -i ref.mkv \
+       -lavfi "[0:v]format=yuv420p10le,hwupload_cuda[d]; \
+               [1:v]format=yuv420p10le,hwupload_cuda[r]; \
+               [d][r]libvmaf_cuda=log_fmt=json:log_path=out.json" \
        -f null -
 ```
 
+From a CUDA decode, whose `sw_format` is `p010le`, convert first — **never feed `p010` directly**,
+its luma is MSB-aligned so it would be read 64x too bright:
+
+```bash
+[0:v]scale_cuda=format=yuv420p10[d]
+```
+
+⚠ **Do not use `scale_cuda=format=yuv420p` on 10-bit input.** It does not error; it downconverts to
+8-bit and returns a correct *8-bit* measurement, which differed from the true 10-bit answer by
+0.031 in testing. That is a different question answered cheaply, not the answer you asked for.
+
 Models are compiled in (`-Dbuilt_in_models=true`), so `vmaf_v0.6.1` works with no `model_path`.
 
-Measured against the CPU filter on the same pair during development: **85.014300** (CUDA) versus
-**85.014337** (CPU).
+Measured against the CPU filter on the same pair: **97.960604** CUDA versus **97.960520** CPU at
+10-bit, and **97.929946** versus **97.929863** at 8-bit.
 
 [BtbN/FFmpeg-Builds#328]: https://github.com/BtbN/FFmpeg-Builds/issues/328
 [#328]: https://github.com/BtbN/FFmpeg-Builds/issues/328
