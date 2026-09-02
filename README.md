@@ -50,19 +50,27 @@ does not.
 | [0005](docs/patches/0005-allow-options-on-derived-hw-devices.md) | options on a derived hardware device (`-init_hw_device …@src,opt=val`) | all targets | shipping, verified on hardware; not gateable |
 | [0006](docs/patches/0006-disable-msys2-doxygen-doc-builds.md) | stop the msys2 packages building doxygen docs | `win64` + `winarm64` | shipping, works around a toolchain crash; not gateable |
 | [0007](docs/patches/0007-dolby-vision-hevc-nvenc.md) | Dolby Vision RPU passthrough for `hevc_nvenc`; moves `0004`'s profile 8.1 conversion into a shared file | all targets | shipping, verified on hardware; **needs `0004`** |
+| [0008](docs/patches/0008-cuda-libvmaf.md) | CUDA-accelerated VMAF — adds `builder/scripts.d/55-libvmaf.sh`, yielding the `libvmaf` and `libvmaf_cuda` filters | `linux64` only | shipping, gated; scored to 5 significant figures against the CPU filter |
 
 **The docs are canonical**; this table is an index.
 
-The two kinds behave differently. `0001`/`0002`/`0006` patch *build systems*, so each covers only
-the targets its build system produces — which is why one nv-codec-headers pin takes two patches,
-`0001` for `builder/` and `0002` for `msys2/`. `0003`/`0004`/`0005`/`0007` patch the *ffmpeg source*,
-by adding to jellyfin-ffmpeg's own `debian/patches/` series that every build system applies, so one
-patch covers every target.
+The two kinds behave differently. `0001`/`0002`/`0006`/`0008` patch *build systems*, so each covers
+only the targets its build system produces — which is why one nv-codec-headers pin takes two
+patches, `0001` for `builder/` and `0002` for `msys2/`. `0003`/`0004`/`0005`/`0007` patch the
+*ffmpeg source*, by adding to jellyfin-ffmpeg's own `debian/patches/` series that every build system
+applies, so one patch covers every target.
 
 Covering every target is not the same as *working* on every target. `0004`'s feature is VAAPI, which
 is linux-only here, so its checks declare `linux` and skip on windows. `0007`'s is NVENC, which is
 built for all four, so its checks declare `all` — same kind of patch, opposite platform answer,
 decided by the feature rather than by the file it patches.
+
+`0008` is narrower still, and is the reason the check grammar has an arch tier. It lives in
+`builder/`, which feeds both linux targets, but its script gates on `[[ $TARGET == linux64 ]]`
+because CUDA VMAF needs an nvcc toolchain and arm64 jellyfin hosts are overwhelmingly Rockchip and
+Raspberry Pi. `linux` would be a false declaration, so it declares `linux64` and the workflow passes
+each job its target — a fine-grained declaration reached with no target is a hard error, never a
+skip.
 
 Not every build-system patch adds a feature: `0006` removes a documentation build that was crashing
 the winarm64 job, and changes nothing about the binary.
@@ -90,7 +98,7 @@ Only `0001`/`0002` appear in that table, because they are the ones that give an 
 `0003`/`0004`/`0005`/`0007` go into the ffmpeg patch series, so they reach every target every build
 system produces, including the `.deb` and mac builds this repo does not make. `0006` is absent for the
 opposite reason: it is msys2-only and adds no capability, having removed a documentation build that
-was crashing the winarm64 job.
+was crashing the winarm64 job. `0008` is absent because it is linux64-only by construction.
 
 **The 12 `.deb` packages are the one real gap.** They come from a third build system
 (`Dockerfile.in` + `docker-build.sh`) with its own nv-codec-headers pin that neither pin patch
@@ -99,7 +107,8 @@ stock, without `-tune uhq`.
 
 Adding `.deb` here needs a third pin patch. Without one the packages ship the old headers and
 nothing says so. `0003`/`0004`/`0005`/`0007` need no such duplicate — they patch the ffmpeg source,
-which every build system applies.
+which every build system applies. `0008` would need its own duplicate for the same reason `0001`
+does, and does not have one: the `.deb` packages get no libvmaf.
 
 ## Layout
 

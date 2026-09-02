@@ -29,7 +29,7 @@ build:
 | base image | must carry **the Mesa/libva under test** — that is the point of the loop | any sane distro base; the driver is **not** in the image |
 | how the GPU gets in | `--device /dev/dri` | CDI: `--device nvidia.com/gpu=all` (docker) |
 | extra build deps | Vulkan headers + libplacebo from source (the two expensive steps below) | **nv-codec-headers only** — skip both |
-| configure | `--enable-vaapi --enable-vulkan --enable-libplacebo --enable-libdrm` | `--enable-ffnvcodec --enable-cuda --enable-nvenc --enable-nvdec --enable-cuvid` |
+| configure | `--enable-vaapi --enable-vulkan --enable-libplacebo --enable-libdrm` | `--enable-ffnvcodec --enable-cuda --enable-nvenc --enable-nvdec --enable-cuvid`, **plus `--enable-vaapi --enable-libdrm`** so `hevc_vaapi` still compiles |
 
 ⚠ **"Build and run in the same image" means something different on each.** On VAAPI the driver under
 test *is* the base image, which is the whole reason for the rule. On NVIDIA the driver libraries are
@@ -44,14 +44,19 @@ compiles and the other half is discovered by CI.
 Set these once:
 
 ```bash
-BASE_IMAGE=...            # image whose Mesa/libva is the one your measurements use
+BASE_IMAGE=...            # VAAPI: the image whose Mesa/libva you are testing.
+                          # NVENC: any current distro base -- the driver comes from the host.
 SCRATCH=/path/with/space  # ~10 GB; source tree, build output
-UPSTREAM_TAG=v8.1.2-2     # the tag CI builds; see .github/scripts/resolve-upstream.sh --plan
+UPSTREAM_TAG=v8.1.2-3     # the tag CI builds; see .github/scripts/resolve-upstream.sh --plan
 ```
 
-Pick `BASE_IMAGE` deliberately. A stock distro image is the wrong choice if your GPU needs a newer
-driver than the distro ships, and it also changes libva and libdrm at the same time — three moving
-parts against whatever you are trying to isolate.
+**On the VAAPI track, pick `BASE_IMAGE` deliberately.** A stock distro image is the wrong choice if
+your GPU needs a newer driver than the distro ships, and it also changes libva and libdrm at the same
+time — three moving parts against whatever you are trying to isolate.
+
+**On the NVENC track this does not apply**, and choosing an exotic base only buys you problems: the
+driver is injected by CDI from the host, so the image contributes the toolchain and nothing else.
+`ubuntu:24.04` is a fine answer.
 
 ## 1. Source tree
 
@@ -76,7 +81,7 @@ ln -s debian/patches patches      # quilt looks for patches/ at the tree root, a
 Then push the ffmpeg patch series itself (inside the container, step 3):
 
 ```bash
-quilt push -a          # 101 at v8.1.2-3: upstream's 98 plus this repo's 3
+quilt push -a || true  # 102 at v8.1.2-3: upstream's 98 plus this repo's 4
 ```
 
 The series is not optional. Several things this fork relies on live there — `vf_libplacebo`
@@ -135,7 +140,7 @@ FROM ${BASE_IMAGE}
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential git quilt yasm nasm pkg-config cmake python3 ca-certificates \
-      libva-dev libdrm-dev \
+      clang libva-dev libdrm-dev \
  && rm -rf /var/lib/apt/lists/*
 RUN git clone -q https://github.com/FFmpeg/nv-codec-headers.git /opt/nvh \
  && cd /opt/nvh && git checkout -q <SCRIPT_COMMIT from 50-ffnvcodec.sh> \
@@ -147,6 +152,14 @@ ENTRYPOINT ["/bin/bash"]
 `hevc_vaapi` compile on a host with no AMD GPU, which is the only way to check that a change to
 shared code has not broken the other encoder. Compiling it costs seconds; not compiling it means
 finding out from CI.
+
+`clang` is not optional either. `--enable-cuda-llvm` is how ffmpeg compiles its own `.cu` kernels —
+it uses clang with `-nocudainc -nocudalib`, not nvcc — so without clang configure stops at
+`ERROR: cuda_llvm requested but not found`. Dropping the flag instead costs you `scale_cuda`, which
+is mandatory for anything feeding `libvmaf_cuda`.
+
+(The one place a real CUDA toolkit does appear is `55-libvmaf.sh`, and only inside its own build
+layer — see [0008](patches/0008-cuda-libvmaf.md). Nothing else in the fork needs nvcc.)
 
 Confirm the headers are the ones you meant before building ffmpeg:
 
@@ -177,7 +190,7 @@ dpkg-query -W -f='${Version}\n' mesa-va-drivers    # unchanged from the base ima
 
 ```bash
 podman run --rm -v "$SCRATCH:/work:z" build-image -c '
-  cd /work/src && quilt push -a
+  cd /work/src && quilt push -a || true
   ./configure --prefix=/work/out \
     --disable-autodetect \
     --enable-gpl --enable-version3 \
@@ -196,6 +209,10 @@ For the **NVENC track**, swap the four hardware flags:
 
 `quilt push -a` is still not optional on either track: patches apply to the source regardless of
 which codecs get configured in, and the series is what the fork *is*.
+
+⚠ **`quilt push -a` exits 2 when the series is already fully applied.** That is success, not
+failure — but it kills any `set -e` script on the second run, which is exactly the shape of a
+rebuild loop. Hence the `|| true` above.
 
 `--disable-autodetect` is where the time goes. Every *internal* codec still builds — hevc, `hwmap`,
 `scale_vaapi`, `psnr`, `framemd5`, matroska — but no external codec library is linked. x265, SVT-AV1

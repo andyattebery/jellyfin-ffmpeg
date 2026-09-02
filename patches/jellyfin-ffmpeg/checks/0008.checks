@@ -1,0 +1,25 @@
+# 0008 — CUDA-accelerated libvmaf via builder/scripts.d/55-libvmaf.sh.
+#
+# The first fine-grained declaration in this directory, and the reason the tier exists.
+#
+# Like 0001 this attaches to a build system rather than to a platform: builder/ is where it lives,
+# and msys2/ has no libvmaf package at all, so there is no windows counterpart to declare and no
+# 0002-style sibling to write. But it is narrower than 0001 in a way `linux` cannot express.
+# 55-libvmaf.sh gates on `[[ $TARGET == linux64 ]]`, so linuxarm64 gets no libvmaf whatsoever —
+# and verify-binary.sh cannot tell the two apart from the binary, because both linux jobs hand it
+# a path named `ffmpeg`. Declaring `linux` here would fail the arm64 job on a feature that was
+# never built for it.
+#
+# So the workflow passes each job its target and this file names one. See verify-binary.sh:29-45
+# for the two tiers and why a fine declaration with no target is an error rather than a skip.
+# `ungateable` was the alternative and was rejected: this fork exists because a win64 asset once
+# shipped with a feature silently missing.
+#
+# BOTH lines are load-bearing and must stay. `--enable-libvmaf` always produces the `libvmaf`
+# filter; `libvmaf_cuda` appears only if the linked libvmaf was built with -Denable_cuda=true,
+# because configure:7392 is check_pkg_config and not require_pkg_config. A build whose CUDA half
+# silently no-op'd would sail past a `libvmaf`-only declaration. The `no-vmafcuda` stub in
+# --self-test is the negative control for exactly that.
+
+filter  linux64  libvmaf
+filter  linux64  libvmaf_cuda

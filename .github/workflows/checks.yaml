@@ -30,7 +30,7 @@ jobs:
       - name: verify-binary self-test
         run: ./.github/scripts/verify-binary.sh --self-test
 
-      - name: Show what each platform would check
+      - name: Show what each target would check
         run: ./.github/scripts/verify-binary.sh --list
 
       - name: resolve-upstream self-test

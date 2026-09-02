@@ -1,0 +1,171 @@
+diff --git a/builder/scripts.d/55-libvmaf.sh b/builder/scripts.d/55-libvmaf.sh
+new file mode 100755
+index 0000000..6ef4280
+--- /dev/null
++++ b/builder/scripts.d/55-libvmaf.sh
+@@ -0,0 +1,165 @@
++#!/bin/bash
++
++SCRIPT_REPO="https://github.com/Netflix/vmaf.git"
++SCRIPT_COMMIT="3f9e02af258a5c0e30124fc585a3c3af90126dee"   # v3.2.0
++
++# CUDA is needed at BUILD time only, and the version is not a free choice.
++#
++# ffmpeg's own .cu kernels are compiled by clang via --enable-cuda-llvm with
++# `-nocudainc -nocudalib -include compat/cuda/cuda_runtime.h` (configure:7120), and its PTX is
++# turned into a C array by ffmpeg's own tools/bin2c.c. libvmaf does neither: its meson calls
++# find_program('bin2c') -- CUDA's, not ffmpeg's -- and its device compile does not pass
++# -nocudainc/-nocudalib. Those two flags are present in libvmaf/src/meson.build but commented
++# out, with the note "many complaints about device intrinsics when compiling without CTK".
++# The VMAF CUDA author tried that route himself (gedoensmax/vmaf:clang_cuda_compat,
++# BtbN/FFmpeg-Builds#328) and called it "not correct and non performant". So: a real toolkit.
++#
++# 13.2 specifically. Everything from 12.8 through 13.1 fails to compile at all against the
++# base image's glibc 2.43 -- CUDA's crt/math_functions.h collides with bits/mathcalls.h over
++# cospi/sinpi/rsqrt ("exception specification is incompatible"), and nvcc's host pass includes
++# math.h even for a device-only --fatbin. 13.2 is the first release that clears it, and it also
++# clears the gcc-15 host check, so no -ccbin or -allow-unsupported-compiler is needed.
++# It is also the newest CUDA the fork's target driver reports support for.
++#
++# The cost, which is real and belongs in the docs: 13.x fails libvmaf's own
++# version_compare('<13') guard, so no `-gencode=compute_50` PTX fallback is emitted and
++# libvmaf_cuda covers Turing and newer only. The CPU libvmaf filter is unaffected.
++CUDA_VER="13-2"
++CUDA_DIR="/usr/local/cuda-${CUDA_VER//-/.}"
++
++ffbuild_enabled() {
++    # linux64 only, and for arm64 that is a mechanism rather than a preference. libvmaf's meson
++    # calls add_languages('cuda', required: true), so meson sanity-checks nvcc AS A COMPILER FOR
++    # THE HOST MACHINE. On linux64 that is x86_64 -> x86_64 and nvcc genuinely is one; on
++    # linuxarm64 it would have to be an aarch64 host compiler, which nvcc is not.
++    # win64/winarm64 come from msys2/, where nvcc has no MSVC to sit on.
++    [[ $TARGET == linux64 ]] || return -1
++    return 0
++}
++
++ffbuild_dockerbuild() {
++    # Only this layer gets the toolkit: ffbuild_dockerlayer copies $FFBUILD_PREFIX forward and
++    # nothing else, so nvcc never reaches the ffmpeg build stage or the shipped image. There is
++    # no ubuntu2604/resolute directory in NVIDIA's repo; the ubuntu2404 one is what works.
++    curl -fsSLo /tmp/cuda-keyring.deb \
++        https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
++    dpkg -i /tmp/cuda-keyring.deb
++    apt-get -y update
++    apt-get -y install --no-install-recommends "cuda-nvcc-${CUDA_VER}" "cuda-cudart-dev-${CUDA_VER}"
++    rm -f /tmp/cuda-keyring.deb
++    # The versioned path, not the /usr/local/cuda symlink. The symlink is real -- the packaging
++    # registers it through update-alternatives -- but it is shared state that a second CUDA
++    # version would repoint, and both nvcc and bin2c live here either way.
++    export PATH="${CUDA_DIR}/bin:$PATH"
++    command -v nvcc  >/dev/null || { echo "nvcc not on PATH after installing cuda-nvcc-${CUDA_VER}"; return 1; }
++    command -v bin2c >/dev/null || { echo "bin2c not on PATH; libvmaf's meson calls find_program('bin2c')"; return 1; }
++
++    # nvcc has to be told where ffnvcodec lives, and the image's CFLAGS will not do it. The .fatbin
++    # custom_targets in libvmaf/src/meson.build build their own -I list (./src, ../src, ../include,
++    # ../src/feature, ../src/cuda) and inherit nothing, but cuda_helper.cuh includes
++    # <ffnvcodec/dynlink_loader.h>, which lives under $FFBUILD_PREFIX here rather than in a default
++    # search path. nvcc reads NVCC_PREPEND_FLAGS itself, so this reaches those commands even though
++    # meson never passes them anything.
++    #
++    # Distro builds do not hit this: ffnvcodec normally lands in /usr/local/include, which nvcc
++    # already searches. That is also why it does not reproduce outside the builder image.
++    export NVCC_PREPEND_FLAGS="-I${FFBUILD_PREFIX}/include"
++
++    git-mini-clone "$SCRIPT_REPO" "$SCRIPT_COMMIT" vmaf
++    cd vmaf
++
++    # tools/ builds host executables that are not wanted and do not cross-compile.
++    echo > libvmaf/tools/meson.build
++
++    # libsvm's unqualified swap/min/max collide at link time.
++    sed -i -E 's/([^.>:_[:alnum:]])swap\(/\1libsvm_swap(/g' libvmaf/src/svm.cpp
++    sed -i -E 's/([^.>:_[:alnum:]])min\(/\1libsvm_min(/g' libvmaf/src/svm.cpp
++    sed -i -E 's/([^.>:_[:alnum:]])max\(/\1libsvm_max(/g' libvmaf/src/svm.cpp
++
++    # The build directory MUST be libvmaf/build, one level under the source root. The .fatbin
++    # custom_targets in libvmaf/src/meson.build use relative includes -- `-I ../src`,
++    # `-I ../include`, `-I ../src/feature` -- which resolve nowhere else. An out-of-tree build
++    # dir fails every .cu with `fatal error: feature_collector.h: No such file or directory`.
++    # BtbN's 45-vmaf.sh uses `mkdir build && cd build; meson ../libvmaf`, which would break here;
++    # it works for them only because their build has no CUDA and these targets never run.
++    #
++    # --libdir=lib is not cosmetic either: meson defaults to a multiarch libdir, and the image
++    # sets PKG_CONFIG_LIBDIR=$FFBUILD_PREFIX/lib/pkgconfig, so the .pc would land where ffmpeg's
++    # configure never looks.
++    #
++    # And the second cross file is not optional. libvmaf/src/meson.build:366 calls
++    # add_languages('cuda', required: true); under a cross build meson refuses that with
++    #     ERROR: 'cuda' compiler binary not defined in cross file [binaries] section
++    # because the image's /cross.meson lists only c/cpp/ld/ar/ranlib/strip. meson merges multiple
++    # --cross-file arguments in order, so an overlay naming nvcc fixes it without patching either
++    # upstream's cross file or vmaf.
++    #
++    # This works here only because linux64 is x86_64 -> x86_64, so nvcc really is a valid compiler
++    # for the host machine. It is also the concrete reason arm64 is out of scope: meson would
++    # sanity-check nvcc as an aarch64 host compiler, which it is not.
++    cat >/tmp/cuda-cross.meson <<CROSSEOF
++[binaries]
++cuda = '${CUDA_DIR}/bin/nvcc'
++CROSSEOF
++
++    local myconf=(
++        --cross-file=/cross.meson
++        --cross-file=/tmp/cuda-cross.meson
++        --prefix="$FFBUILD_PREFIX"
++        --libdir=lib
++        --buildtype=release
++        --default-library=static
++        -Dbuilt_in_models=true
++        -Denable_tests=false
++        -Denable_docs=false
++        -Denable_float=true
++        -Denable_asm=true
++        -Denable_avx512=true
++        -Denable_cuda=true
++    )
++
++    meson setup libvmaf/build libvmaf "${myconf[@]}"
++    ninja -C libvmaf/build -j"$(nproc)"
++    ninja -C libvmaf/build install
++
++    # Two private libs, both required, neither declared by libvmaf's own .pc:
++    #
++    #   -lstdc++  svm.cpp is C++.  Missing it reads as
++    #             `undefined reference to __gxx_personality_v0`.
++    #   -ldl      cuda/common.c dlopen()s the driver through ffnvcodec's dynlink loader. glibc
++    #             folded dlopen into libc at 2.34, but ct-ng-config pins CT_GLIBC_VERSION="2.28",
++    #             so this toolchain still needs libdl. Missing it reads as
++    #             `undefined reference to dlopen` from cuda_common.c.o.
++    #
++    # Neither reproduces on a modern distro: its glibc has dlopen in libc. This is a cross-build
++    # requirement, found by running the stage in base-linux64.
++    #
++    # Both are only honoured because the image's FFBUILD_TARGET_FLAGS carries
++    # --pkg-config-flags=--static. Without that, configure fails with the misleading
++    # "libvmaf >= 2.0.0 not found using pkg-config" while the real error is a link error several
++    # hundred lines down config.log.
++    #
++    # Checked rather than assumed, both ways round. If --libdir ever stops landing the .pc here, a
++    # bare `>>` would CREATE a one-line file that pkg-config then reports as a malformed libvmaf --
++    # a confusing failure a long way from its cause. And v3.2.0 emits no Libs.private at all, but a
++    # future pin might, and two of them in one .pc is undefined.
++    local pc="$FFBUILD_PREFIX/lib/pkgconfig/libvmaf.pc"
++    [ -f "$pc" ] || { echo "expected $pc after install; meson put it somewhere else"; return 1; }
++    if grep -q '^Libs.private:' "$pc"; then
++        sed -i -E 's/^Libs\.private:(.*)$/Libs.private:\1 -lstdc++ -ldl/' "$pc"
++    else
++        echo "Libs.private: -lstdc++ -ldl" >> "$pc"
++    fi
++}
++
++ffbuild_configure() {
++    # One flag yields both filters. configure:7391 requires libvmaf; configure:7392 then does a
++    # non-fatal check_pkg_config for libvmaf_cuda.h + vmaf_cuda_state_init, so libvmaf_cuda
++    # appears only when libvmaf was built with -Denable_cuda=true. That is why checks/0008.checks
++    # asserts BOTH filters -- asserting only `libvmaf` would pass a CUDA-less build.
++    echo --enable-libvmaf
++}
++
++ffbuild_unconfigure() {
++    echo --disable-libvmaf
++}

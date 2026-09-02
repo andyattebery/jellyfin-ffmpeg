@@ -187,7 +187,11 @@ jobs:
         run: |
           set -euo pipefail
           tmp=$(mktemp -d); tar xf dist/*_portable_linux64-gpl.tar.xz -C "$tmp"
-          .fork/.github/scripts/verify-binary.sh "$(find "$tmp" -name ffmpeg -type f | head -1)"
+          # The 2nd argument is the target. Both linux jobs hand over a path named `ffmpeg`, so
+          # arch is not recoverable from it -- without this, a linux64-only declaration such as
+          # 0008's would be asserted against the arm64 asset too. verify-binary.sh treats a
+          # fine-grained declaration with no target as a hard error, never a skip.
+          .fork/.github/scripts/verify-binary.sh "$(find "$tmp" -name ffmpeg -type f | head -1)" linux64
 
       - uses: actions/upload-artifact@v7
         with:
@@ -364,7 +368,7 @@ jobs:
       # because Windows pins the headers in msys2/PKGBUILD, not builder/scripts.d.
       - name: Verify the binary carries the features
         if: needs.resolve.outputs.mode == 'full'
-        run: .fork/.github/scripts/verify-binary.sh "$(find . -name ffmpeg.exe -type f | head -1)"
+        run: .fork/.github/scripts/verify-binary.sh "$(find . -name ffmpeg.exe -type f | head -1)" win64
 
       # Only the zip. msys2/build.sh:127 also drops a <target>-<variant>.txt pointer file into
       # this directory for upstream's own publish flow; uploading it would put a third file in
@@ -463,7 +467,7 @@ jobs:
       # Runs on the binary's own platform, same as the win64 job.
       - name: Verify the binary carries the features
         if: needs.resolve.outputs.mode == 'full'
-        run: .fork/.github/scripts/verify-binary.sh "$(find . -name ffmpeg.exe -type f | head -1)"
+        run: .fork/.github/scripts/verify-binary.sh "$(find . -name ffmpeg.exe -type f | head -1)" winarm64
 
       # Only the zip — buildarm64.sh:126 drops a winarm64-clang-gpl.txt pointer here too.
       - uses: actions/upload-artifact@v7
@@ -502,7 +506,7 @@ jobs:
         run: |
           set -euo pipefail
           tmp=$(mktemp -d); tar xf dist/*_portable_linuxarm64-gpl.tar.xz -C "$tmp"
-          .fork/.github/scripts/verify-binary.sh "$(find "$tmp" -name ffmpeg -type f | head -1)"
+          .fork/.github/scripts/verify-binary.sh "$(find "$tmp" -name ffmpeg -type f | head -1)" linuxarm64
 
   # ---------------------------------------------------------------------------------------
 
