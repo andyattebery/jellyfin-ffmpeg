@@ -800,7 +800,7 @@ self_test_e2e() {
   make_stub "$tmp/good" ffmpeg     good
   make_stub "$tmp/good" ffmpeg.exe good
   ok "a complete linux64 binary passes" "$(run_stub "$tmp/good/ffmpeg" linux64)"     "0 |   all 13 checks passed for $tmp/good/ffmpeg (linux64)"
-  ok "a complete win64 binary passes"   "$(run_stub "$tmp/good/ffmpeg.exe" win64)"   "0 |   all 8 checks passed for $tmp/good/ffmpeg.exe (win64)"
+  ok "a complete win64 binary passes"   "$(run_stub "$tmp/good/ffmpeg.exe" win64)"   "0 |   all 9 checks passed for $tmp/good/ffmpeg.exe (win64)"
 
   # VAAPI gone from a LINUX build must be a hard failure, never a skip.
   make_stub "$tmp/novaapi" ffmpeg     no-vaapi
@@ -815,7 +815,7 @@ self_test_e2e() {
   # If this ever fails, every publish is blocked and it costs 2.5h to find out.
   ok "windows build without hevc_vaapi still passes" \
      "$(run_stub "$tmp/novaapi/ffmpeg.exe" win64)" \
-     "0 |   all 8 checks passed for $tmp/novaapi/ffmpeg.exe (win64)"
+     "0 |   all 9 checks passed for $tmp/novaapi/ffmpeg.exe (win64)"
 
   # Single-feature regressions, one per declaration source, so a passing run means something.
   make_stub "$tmp/nouhq" ffmpeg no-uhq

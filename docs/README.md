@@ -20,6 +20,7 @@ the doc is the thing to fix.
 | [0007 — Dolby Vision RPU passthrough for hevc_nvenc](patches/0007-dolby-vision-hevc-nvenc.md) | all targets | shipping, verified on hardware; **requires 0004** |
 | [0008 — CUDA-accelerated VMAF (`libvmaf_cuda`)](patches/0008-cuda-libvmaf.md) | `linux64` only | shipping, gated; scored against the CPU filter on hardware |
 | [0009 — `libvmaf_cuda` accepts 10-, 12- and 16-bit](patches/0009-libvmaf-cuda-10bit.md) | `linux64` only | shipping, ungateable; **requires 0008** |
+| [0010 — `libvmaf` on the Windows builds](patches/0010-libvmaf-windows.md) | `win64`, `winarm64` | shipping, gated; CPU-only, the Windows counterpart to 0008 |
 
 Adding a patch means adding a doc here and a `checks/NNNN.checks` declaration. Both are enforced by
 the gate — see below.

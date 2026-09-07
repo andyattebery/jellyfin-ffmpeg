@@ -618,8 +618,8 @@ jobs:
             echo "Upstream \`${UPSTREAM_TAG}\` built with nv-codec-headers bumped to \`${PIN_NAME}\`,"
             echo "unlocking \`-tune uhq\`, \`-tf_level\`, \`-lookahead_level\` and \`-split_encode_mode\`."
             echo
-            echo "Also carries **CUDA-accelerated VMAF** — the \`libvmaf\` and \`libvmaf_cuda\` filters."
-            echo "\`libvmaf_cuda\` is **linux64 only**; the other three assets get neither filter."
+            echo "Also carries **VMAF**. The \`libvmaf\` filter is on linux64, win64 and winarm64;"
+            echo "the CUDA-accelerated \`libvmaf_cuda\` is **linux64 only**. linuxarm64 has neither."
             echo
             echo "Driver floors — check yours before installing:"
             echo

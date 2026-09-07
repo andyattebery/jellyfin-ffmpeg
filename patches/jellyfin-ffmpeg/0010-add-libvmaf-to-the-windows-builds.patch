@@ -1,0 +1,118 @@
+diff --git a/msys2/PKGBUILD/40-mingw-w64-libvmaf/PKGBUILD b/msys2/PKGBUILD/40-mingw-w64-libvmaf/PKGBUILD
+new file mode 100644
+index 0000000..e1b59f3
+--- /dev/null
++++ b/msys2/PKGBUILD/40-mingw-w64-libvmaf/PKGBUILD
+@@ -0,0 +1,88 @@
++# Maintainer: Andy Attebery <nice.yard4881@fastmail.com>
++
++_realname=vmaf
++pkgbase=mingw-w64-jellyfin-${_realname}
++pkgname=("${MINGW_PACKAGE_PREFIX}-jellyfin-${_realname}")
++pkgver=3.2.0
++pkgrel=1
++pkgdesc="Perceptual video quality assessment algorithm based on multi-method fusion (mingw-w64)"
++arch=('any')
++mingw_arch=('mingw64' 'ucrt64' 'clang64' 'clangarm64')
++url='https://github.com/Netflix/vmaf'
++msys2_repository_url='https://github.com/Netflix/vmaf'
++license=('spdx:BSD-2-Clause-Patent')
++# nasm is x86-only; vmaf's asm is nasm-based, so on clangarm64 it must not be a makedepend.
++# Same guard shape as 40-mingw-w64-dav1d/PKGBUILD:17-19.
++makedepends=("${MINGW_PACKAGE_PREFIX}-pkgconf"
++             $( [[ "${CARCH}" != "i686" \
++                   && "${CARCH}" != "x86_64" ]] \
++                || echo "${MINGW_PACKAGE_PREFIX}-nasm" )
++             "${MINGW_PACKAGE_PREFIX}-cc"
++             "${MINGW_PACKAGE_PREFIX}-meson"
++             "${MINGW_PACKAGE_PREFIX}-ninja")
++source=("https://github.com/Netflix/${_realname}/archive/v${pkgver}/${_realname}-${pkgver}.tar.gz")
++sha256sums=('a28f93f3b4fa65601be324587072e32a6a704a304ba7b1aec9b70b3f709bc1dc')
++
++export MINGW_TOOLCHAIN_PREFIX="${MINGW_PREFIX}"
++export FF_MINGW_PREFIX="${MINGW_TOOLCHAIN_PREFIX}/ffbuild"
++
++build() {
++  mkdir -p "${srcdir}/build-${MSYSTEM}" && cd "${srcdir}/build-${MSYSTEM}"
++
++  # -lpthread is required; taken from MSYS2's own mingw-w64-vmaf PKGBUILD rather than guessed.
++  #
++  # enable_cuda is left at its meson default of false, and that is the whole reason this package
++  # is CPU-only: nvcc needs MSVC, which clang64 does not have, and the Windows runners carry no
++  # CUDA toolkit. So `libvmaf_cuda` does not exist on Windows -- only the plain `libvmaf` filter.
++  # Do NOT add MSYS2's --auto-features=enabled here. It would not turn CUDA on (enable_cuda is a
++  # boolean, not a meson `feature`), but relying on that distinction is a trap for the next reader.
++  #
++  # The remaining options match builder/scripts.d/55-libvmaf.sh on Linux, deliberately: eta's
++  # scores have to be comparable with media-01's, so both platforms must build the same library.
++  # built_in_models keeps vmaf_v0.6.1 compiled in, so there is no model file to ship or locate.
++  LDFLAGS+=" -lpthread" \
++  MSYS2_ARG_CONV_EXCL="--prefix=" \
++    ${MINGW_TOOLCHAIN_PREFIX}/bin/meson setup \
++      --prefix=${FF_MINGW_PREFIX} \
++      --default-library static \
++      --buildtype plain \
++      -Dbuilt_in_models=true \
++      -Denable_tests=false \
++      -Denable_docs=false \
++      -Denable_float=true \
++      "../${_realname}-${pkgver}/libvmaf"
++
++  ${MINGW_TOOLCHAIN_PREFIX}/bin/meson compile
++}
++
++check() {
++  :
++}
++
++package() {
++  cd "${srcdir}/build-${MSYSTEM}"
++
++  DESTDIR="${pkgdir}" ${MINGW_TOOLCHAIN_PREFIX}/bin/meson install
++
++  # src/svm.cpp is C++, and msys2/build.sh passes --pkg-config-flags=--static, so whatever the
++  # static link needs has to be declared here or ffmpeg's configure fails with the misleading
++  # "libvmaf >= 2.0.0 not found using pkg-config" while the real error is an undefined C++ symbol
++  # several hundred lines down config.log.
++  #
++  # -lstdc++ is this tree's convention -- 55-mingw-w64-libplacebo, 50-mingw-w64-libvpl,
++  # 30-mingw-w64-chromaprint, 50-mingw-w64-shaderc and 50-mingw-w64-spirv-cross all write it and
++  # nothing writes -lc++, even though clang64 ships libc++.
++  #
++  # Checked rather than appended blind: libvmaf's generated .pc has no Libs.private line at all on
++  # Linux, so a bare sed would match nothing and silently do nothing. Fail loudly instead.
++  local pc="${pkgdir}${FF_MINGW_PREFIX}/lib/pkgconfig/libvmaf.pc"
++  [ -f "${pc}" ] || { echo "expected ${pc} after install; meson put it somewhere else"; return 1; }
++  if grep -q '^Libs.private:' "${pc}"; then
++    sed -i '/^Libs.private:/ s/$/ -lstdc++/' "${pc}"
++  else
++    echo "Libs.private: -lstdc++" >> "${pc}"
++  fi
++
++  install -Dm644 "${srcdir}/${_realname}-${pkgver}/LICENSE" \
++    "${pkgdir}${FF_MINGW_PREFIX}/share/licenses/${_realname}/LICENSE"
++}
+diff --git a/msys2/build.sh b/msys2/build.sh
+index 13f5018..fdc6e89 100755
+--- a/msys2/build.sh
++++ b/msys2/build.sh
+@@ -81,6 +81,7 @@ PKG_CONFIG_PATH=/clang64/ffbuild/lib/pkgconfig ./configure \
+     --enable-libx265 \
+     --enable-libsvtav1 \
+     --enable-libdav1d \
++    --enable-libvmaf \
+     --enable-libfdk-aac \
+     --enable-libshaderc \
+     --enable-libplacebo \
+diff --git a/msys2/buildarm64.sh b/msys2/buildarm64.sh
+index 1e2a13b..065a264 100755
+--- a/msys2/buildarm64.sh
++++ b/msys2/buildarm64.sh
+@@ -82,6 +82,7 @@ PKG_CONFIG_PATH=/clangarm64/ffbuild/lib/pkgconfig ./configure \
+     --enable-libx265 \
+     --enable-libsvtav1 \
+     --enable-libdav1d \
++    --enable-libvmaf \
+     --enable-libfdk-aac \
+     --enable-libshaderc \
+     --enable-libplacebo \

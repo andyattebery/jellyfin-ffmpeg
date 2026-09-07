@@ -52,12 +52,14 @@ does not.
 | [0007](docs/patches/0007-dolby-vision-hevc-nvenc.md) | Dolby Vision RPU passthrough for `hevc_nvenc`; moves `0004`'s profile 8.1 conversion into a shared file | all targets | shipping, verified on hardware; **needs `0004`** |
 | [0008](docs/patches/0008-cuda-libvmaf.md) | CUDA-accelerated VMAF — adds `builder/scripts.d/55-libvmaf.sh`, yielding the `libvmaf` and `libvmaf_cuda` filters | `linux64` only | shipping, gated; scored to 5 significant figures against the CPU filter |
 | [0009](docs/patches/0009-libvmaf-cuda-10bit.md) | `libvmaf_cuda` accepts 10-, 12- and 16-bit, so HDR and Dolby Vision can be scored at all | `linux64` only | shipping, ungateable; **needs `0008`** |
+| [0010](docs/patches/0010-libvmaf-windows.md) | `libvmaf` on Windows — adds `msys2/PKGBUILD/40-mingw-w64-libvmaf`, so eta can score at all | `win64` + `winarm64` | shipping, gated; CPU-only, no `libvmaf_cuda` |
 
 **The docs are canonical**; this table is an index.
 
-The two kinds behave differently. `0001`/`0002`/`0006`/`0008` patch *build systems*, so each covers
-only the targets its build system produces — which is why one nv-codec-headers pin takes two
-patches, `0001` for `builder/` and `0002` for `msys2/`. `0003`/`0004`/`0005`/`0007` patch the
+The two kinds behave differently. `0001`/`0002`/`0006`/`0008`/`0010` patch *build systems*, so each
+covers only the targets its build system produces — which is why one nv-codec-headers pin takes two
+patches, `0001` for `builder/` and `0002` for `msys2/`. VMAF splits the same way: `0008` is the
+`builder/` half and `0010` the `msys2/` one. `0003`/`0004`/`0005`/`0007` patch the
 *ffmpeg source*, by adding to jellyfin-ffmpeg's own `debian/patches/` series that every build system
 applies, so one patch covers every target.
 

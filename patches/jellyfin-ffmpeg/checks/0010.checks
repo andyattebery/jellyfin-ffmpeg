@@ -1,0 +1,20 @@
+# 0010 — libvmaf on the two Windows builds, via msys2/PKGBUILD/40-mingw-w64-libvmaf.
+#
+# WINDOWS, coarse, and that is the honest answer rather than the convenient one. Both windows
+# targets get the filter: msys2/build.sh and msys2/buildarm64.sh share the PKGBUILD directory and
+# each gained the same --enable-libvmaf line. docs/verification-gate.md says to reach for the fine
+# tier only when a patch builds for one target and not its sibling, which is not the case here —
+# contrast 0008, which genuinely is linux64-only.
+#
+# ONE line, not two. 0008 declares both `libvmaf` and `libvmaf_cuda` because on linux the CUDA half
+# can silently no-op (configure:7392 is check_pkg_config, not require_). There is no such risk here:
+# `libvmaf_cuda` is not built on Windows at all and must NOT be, since nvcc needs MSVC that clang64
+# does not have. Declaring it would assert a feature this patch deliberately does not ship.
+#
+# ⚠ WHAT THIS DOES NOT PROVE. It proves the filter is PRESENT, not that it SCORES THE SAME as
+# media-01 — and parity is the entire reason the patch exists, since eta's numbers are meant to be
+# comparable with the Linux scorer's. Nothing a GPU-less runner can ask ffmpeg will establish that.
+# The standing check is a by-hand cross-host measurement recorded in
+# docs/patches/0010-libvmaf-windows.md; re-run it after any vmaf version bump on either side.
+
+filter  windows  libvmaf

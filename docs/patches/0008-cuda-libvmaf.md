@@ -153,9 +153,14 @@ Neither reproduces in a native build, which is why both were found by running th
   jellyfin hosts are overwhelmingly Rockchip and Raspberry Pi with no NVIDIA GPU at all.
 - **win64 / winarm64** come from `msys2/build.sh`, which loops `makepkg-mingw` over
   `msys2/PKGBUILD/*` on a Windows runner under clang64. nvcc on Windows requires MSVC, which is not
-  in that environment, and GitHub Windows runners carry no CUDA. A **CPU-only**
-  `55-mingw-w64-libvmaf` PKGBUILD would be straightforward and is the obvious follow-up if the
-  plain `libvmaf` filter is wanted on Windows; a CUDA one is a research project.
+  in that environment, and GitHub Windows runners carry no CUDA. That rules out `libvmaf_cuda`
+  there and still does.
+
+  The **CPU-only** half of that prediction shipped as [0010](0010-libvmaf-windows.md), so both
+  Windows assets now carry the plain `libvmaf` filter. One correction worth recording: this doc
+  guessed the package would be `55-mingw-w64-libvmaf`, and it is **`40-`**. Tier 55 in msys2 means
+  "consumes tier 50 headers"; libvmaf depends on nothing in the tree, so it belongs in tier 40 with
+  dav1d and x264.
 
 ## Gate
 
