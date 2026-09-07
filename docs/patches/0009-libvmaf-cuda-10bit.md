@@ -111,6 +111,24 @@ ffmpeg -init_hw_device cuda=cu -filter_hw_device cu \
        -f null -
 ```
 
-⚠ Adding `feature=name=cambi|name=psnr|name=float_ssim` works, but those three have no CUDA
-extractor — only ADM, motion and VIF do. libvmaf keeps a host copy and downloads every frame off
-the GPU for them, which is most of what the GPU path saves. If speed is the point, leave them off.
+### Adding cambi, psnr and float_ssim
+
+`feature=name=cambi|name=psnr|name=float_ssim` works, and the GPU path is still worth using with
+them on. Only ADM, motion and VIF have CUDA extractors, so libvmaf keeps a host copy and downloads
+every frame for the other three — but that costs less than doing everything on the CPU.
+
+Measured on the 5 s 1080p 10-bit pair, three runs each:
+
+| | wall |
+|---|---|
+| `libvmaf_cuda`, VMAF only | 11–12 s |
+| `libvmaf_cuda` + all three extras | 22–26 s |
+| `libvmaf` (CPU) + all three extras | 45–48 s |
+
+So the extras roughly double the CUDA run, and it is still about **twice as fast as the CPU
+filter**. Leave them off if you only want VMAF; do not avoid the GPU path because of them.
+
+⚠ **Do not try to split this into two passes.** `feature=` *adds* to the default model — there is no
+way to ask `libvmaf` for the extras alone, so a second pass recomputes VMAF redundantly. Measured,
+that comes to ~12 s + ~46 s ≈ **58 s**, slower than either single-pass option and slower than the
+plain CPU run.
