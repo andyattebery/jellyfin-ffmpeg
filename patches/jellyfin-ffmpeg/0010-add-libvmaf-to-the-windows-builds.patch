@@ -43,8 +43,8 @@ index 0000000..e1b59f3
 +  # Do NOT add MSYS2's --auto-features=enabled here. It would not turn CUDA on (enable_cuda is a
 +  # boolean, not a meson `feature`), but relying on that distinction is a trap for the next reader.
 +  #
-+  # The remaining options match builder/scripts.d/55-libvmaf.sh on Linux, deliberately: eta's
-+  # scores have to be comparable with media-01's, so both platforms must build the same library.
++  # The remaining options match builder/scripts.d/55-libvmaf.sh on Linux, deliberately: Windows
++  # scores have to be comparable with Linux ones, so both platforms must build the same library.
 +  # built_in_models keeps vmaf_v0.6.1 compiled in, so there is no model file to ship or locate.
 +  LDFLAGS+=" -lpthread" \
 +  MSYS2_ARG_CONV_EXCL="--prefix=" \

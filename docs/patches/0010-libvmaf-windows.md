@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Written and gate-verified; **not yet built or released**. Update this row after the first release run, and fill the parity table below. |
+| **Status** | Shipping since `v8.1.2-4` (2026-09-07). Gated on both Windows builds. The cross-platform parity measurement below is still to be run. |
 | **Covers** | `win64` **and** `winarm64` — one PKGBUILD directory feeds both |
 | **Retires when** | Upstream jellyfin-ffmpeg adds libvmaf to `msys2/` itself |
 | **Gate** | `checks/0010.checks` — one `filter` check, declared `windows` |
@@ -20,16 +20,14 @@ default of `false`. That is not a limitation this patch could remove with more e
 
 ## Why
 
-**eta had no VMAF at all.** The BtbN build that carried it was removed
-(`tasks/uhq-1080p-segfault.md:161-165`), leaving the Windows box unable to score anything — and
-unable to answer the "can eta score?" question the scorer-cost probe exists to settle.
+**The Windows assets had no VMAF at all**, so a Windows host running them could not score
+anything.
 
-The goal is **parity**, not merely availability: eta's scores have to be comparable with
-media-01's. That is why the version is pinned to **vmaf 3.2.0**, the same version
-[0008](0008-cuda-libvmaf.md) pins on Linux, and why the meson options deliberately match it
+The goal is **parity**, not merely availability: scores from a Windows host have to be comparable
+with scores from the Linux build. That is why the version is pinned to **vmaf 3.2.0**, the same
+version [0008](0008-cuda-libvmaf.md) pins on Linux, and why the meson options deliberately match it
 (`built_in_models=true`, `enable_float=true`, tests and docs off). Two hosts running different
-libvmaf builds would produce numbers that cannot be pooled, which is the failure the campaign's
-"scoring is centralised" rule exists to prevent.
+libvmaf builds would produce numbers that cannot be pooled.
 
 ## Why this was low-risk
 
@@ -49,8 +47,8 @@ workflow's `setup-msys2` package list needed no change.
 
 ## Three things in the PKGBUILD that look arbitrary and are not
 
-1. **Tier `40`, not `55`.** [0008](0008-cuda-libvmaf.md)'s doc predicted this follow-up and guessed
-   `55-mingw-w64-libvmaf`; that guess was wrong. `msys2/build.sh` runs the PKGBUILD directories in
+1. **Tier `40`, not `55`.** `55-mingw-w64-libvmaf` was the first guess, mirroring Linux's
+   `55-libvmaf.sh`, and it is wrong here. `msys2/build.sh` runs the PKGBUILD directories in
    plain glob order, so the numeric prefix *is* the dependency order, and tier 55 means "consumes
    tier 50 headers" — libplacebo needs shaderc, spirv-cross and vulkan. libvmaf needs nothing in
    the tree, so it belongs in tier 40 with the other codec-level libraries: dav1d, svt-av1, x264.
@@ -90,22 +88,24 @@ Coarse `windows`: both targets genuinely get it, so the fine tier would be a fal
 One line, not 0008's two — `libvmaf_cuda` is deliberately absent here, and declaring it would
 assert a feature this patch does not ship.
 
-**What no check proves: that the scores match media-01's.** Presence is gateable; correctness is
-not, and parity is the entire point of the patch. The standing check is the measurement below.
+**What no check proves: that the scores match the Linux build's.** Presence is gateable;
+correctness is not, and parity is the entire point of the patch. The standing check is the
+measurement below.
 
 ## Parity measurement
 
-Score one identical pair on eta and on media-01 with the CPU `libvmaf` filter and compare. Both are
-vmaf 3.2.0 with built-in models, so they should agree closely — but the achievable tolerance is
-**recorded from measurement, not asserted in advance**, since cross-platform float and SIMD
-ordering differ.
+Score one identical pair with the CPU `libvmaf` filter on a Linux host running the `linux64` asset
+and on a Windows host running the `win64` asset, and compare. Both are vmaf 3.2.0 with built-in
+models, so they should agree closely — but the achievable tolerance is **recorded from
+measurement, not asserted in advance**, since cross-platform float and SIMD ordering differ.
 
-| host | build | VMAF | delta |
-|---|---|---|---|
-| media-01 | linux64, 0008 | _to be filled on first run_ | — |
-| eta | win64, 0010 | _to be filled_ | _to be filled_ |
+| build | VMAF | delta |
+|---|---|---|
+| `linux64`, 0008 | _not yet measured_ | — |
+| `win64`, 0010 | _not yet measured_ | _not yet measured_ |
 
-⚠ eta's paths contain spaces and parentheses — drive it with a `.bat`, never nested shell quoting.
+⚠ On Windows, paths with spaces or parentheses break under nested shell quoting — drive ffmpeg from
+a `.bat` instead.
 
 Re-run after any vmaf version bump on either side.
 

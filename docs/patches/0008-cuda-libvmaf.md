@@ -156,11 +156,8 @@ Neither reproduces in a native build, which is why both were found by running th
   in that environment, and GitHub Windows runners carry no CUDA. That rules out `libvmaf_cuda`
   there and still does.
 
-  The **CPU-only** half of that prediction shipped as [0010](0010-libvmaf-windows.md), so both
-  Windows assets now carry the plain `libvmaf` filter. One correction worth recording: this doc
-  guessed the package would be `55-mingw-w64-libvmaf`, and it is **`40-`**. Tier 55 in msys2 means
-  "consumes tier 50 headers"; libvmaf depends on nothing in the tree, so it belongs in tier 40 with
-  dav1d and x264.
+  The plain CPU `libvmaf` filter has no such obstacle, and [0010](0010-libvmaf-windows.md) adds it
+  to both Windows assets.
 
 ## Gate
 
@@ -210,8 +207,10 @@ ffmpeg -init_hw_device cuda=cu -filter_hw_device cu -i dis.mkv -i ref.mkv \
        -f null -
 ```
 
-From a CUDA decode, whose `sw_format` is `p010le`, convert first — **never feed `p010` directly**,
-its luma is MSB-aligned so it would be read 64x too bright:
+From a CUDA decode, whose `sw_format` is `p010le`, convert first. `p010` is rejected with
+`Unsupported input format` with or without 0009 — deliberately: its luma is MSB-aligned, so
+accepting it would read it 64x too bright and return a wrong score instead of an error (see
+[0009](0009-libvmaf-cuda-10bit.md#what-it-does)):
 
 ```bash
 [0:v]scale_cuda=format=yuv420p10[d]

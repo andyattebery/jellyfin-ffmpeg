@@ -11,9 +11,9 @@
 # `libvmaf_cuda` is not built on Windows at all and must NOT be, since nvcc needs MSVC that clang64
 # does not have. Declaring it would assert a feature this patch deliberately does not ship.
 #
-# ⚠ WHAT THIS DOES NOT PROVE. It proves the filter is PRESENT, not that it SCORES THE SAME as
-# media-01 — and parity is the entire reason the patch exists, since eta's numbers are meant to be
-# comparable with the Linux scorer's. Nothing a GPU-less runner can ask ffmpeg will establish that.
+# ⚠ WHAT THIS DOES NOT PROVE. It proves the filter is PRESENT, not that it SCORES THE SAME as the
+# Linux build — and parity is the entire reason the patch exists, since Windows scores are meant to
+# be comparable with Linux ones. Nothing a GPU-less runner can ask ffmpeg will establish that.
 # The standing check is a by-hand cross-host measurement recorded in
 # docs/patches/0010-libvmaf-windows.md; re-run it after any vmaf version bump on either side.
 

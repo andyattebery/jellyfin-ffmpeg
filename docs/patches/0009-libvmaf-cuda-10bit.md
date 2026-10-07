@@ -3,10 +3,10 @@
 | | |
 |---|---|
 | **Status** | Shipping. Ungateable; correctness held by a by-hand measurement, recorded below. |
-| **Covers** | `linux64` only — the target [0008](0008-cuda-libvmaf.md) builds `libvmaf_cuda` for |
-| **Retires when** | Upstream FFmpeg widens `supported_formats[]` itself, at which point `git apply` fails loudly |
+| **Covers** | All targets — goes into `debian/patches/` as `0904`. The *feature* is `linux64` only, the one target [0008](0008-cuda-libvmaf.md) builds `libvmaf_cuda` for. |
+| **Depends on** | **[0008](0008-cuda-libvmaf.md)**, and specifically the libvmaf motion fix its `55-libvmaf.sh` applies |
+| **Retires when** | Upstream FFmpeg widens `supported_formats[]` itself, at which point the build's `quilt push -a` fails loudly |
 | **Gate** | `checks/0009.checks` — `ungateable linux64`, with the reason |
-| **Requires** | **[0008](0008-cuda-libvmaf.md)**, and specifically the libvmaf motion fix its `55-libvmaf.sh` applies |
 
 ## The problem
 

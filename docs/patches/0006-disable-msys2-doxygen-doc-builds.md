@@ -71,5 +71,5 @@ patches upstream, so that is something to notice if it happens, not something to
   `makedepends` entries are removed rather than only the two flags: with the tool absent, whether
   any such package *would* have run it stops mattering. If a package ever genuinely needs doxygen,
   the symptom is a skipped doc build, the same warning `libtheora` already prints.
-- **This patch modifies existing files**, unlike `0003`/`0004`/`0005` which only create them. A
+- **This patch modifies existing files**, unlike the source patches, which only create them. A
   drifted hunk is therefore a loud `git apply` failure, which is what stands in for a CI gate here.

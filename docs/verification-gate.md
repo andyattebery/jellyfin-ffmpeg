@@ -56,14 +56,14 @@ failure, not a pass.**
 `hevc_vaapi`'s three checks are linux-only, because VAAPI is linux-only in this pipeline — see
 [`0004`](patches/0004-dolby-vision-hevc-vaapi.md). They print `skip` on the two windows jobs rather
 than failing them. `hevc_nvenc`'s equivalent three from
-[`0007`](patches/0007-dolby-vision-hevc-nvenc.md) are declared `all` and run everywhere, which is why
-a linux run reports more `ok` lines than a windows one.
+[`0007`](patches/0007-dolby-vision-hevc-nvenc.md) are the contrast: declared `all`, because NVENC is
+built for all four targets, so they run everywhere.
 
 [`0008`](patches/0008-cuda-libvmaf.md)'s two are the same idea one level down: declared `linux64`,
-so they `skip` on `linuxarm64` as well as on both windows jobs. The runnable counts are
-`linux64` 13, `linuxarm64` 11, `win64` 8, `winarm64` 8 — `--self-test` asserts each is non-zero,
-per target rather than per platform, so a target that ends up with nothing to check is caught here
-rather than by a build.
+so they `skip` on `linuxarm64` as well as on both windows jobs. That is why the four targets run
+different numbers of checks — `--list` prints each target's count. `--self-test` asserts every
+target has at least one runnable check, per target rather than per platform, so a target that ends
+up with nothing to check is caught here rather than by a build.
 
 [`0009`](patches/0009-libvmaf-cuda-10bit.md) uses the fine tier too, but as `ungateable linux64`,
 which is worth understanding as a limit rather than a coverage claim: `ungateable` is handled
@@ -88,20 +88,31 @@ ordering — it is checked after upload rather than before.
 
 ## Adding a patch
 
-Trigger: a new `patches/jellyfin-ffmpeg/NNNN-*.patch`. Required artifacts, both enforced:
+Trigger: a new `patches/jellyfin-ffmpeg/NNNN-*.patch`. Required artifacts, all three enforced:
 
 1. **`patches/jellyfin-ffmpeg/checks/NNNN.checks`** with at least one directive.
-2. **`docs/patches/NNNN-slug.md`** — what the patch does, its status, when it retires.
+2. **`docs/patches/NNNN-slug.md`** — what the patch does, its status, when it retires. Open it with
+   the same header table the other docs use.
+3. **A row in `.github/scripts/release-notes.sh`** linking that doc — in `FEATURES` if the patch
+   changes what the binary can do, with a `y` for each target it works on; in `BUILD_ONLY` if it
+   does not. `release-notes.sh --self-test` fails on any doc in `docs/patches/` the notes do not
+   link.
 
-No artifact, no green gate. This is enforced, not advised.
+No artifact, no green gate. This is enforced, not advised: the first two by
+`verify-binary.sh --self-test`, the third by `release-notes.sh --self-test`, and `checks.yaml` runs
+both on every push.
+
+Also add the patch's row to [the README's patch table](../README.md#the-patches). Nothing enforces
+that one.
 
 Writing the checks file:
 
 - Pick the platform honestly: `linux`, `windows`, or `all`. A patch to `builder/scripts.d` is
-  `linux`; one to `msys2/PKGBUILD` is `windows`; one that adds to `debian/patches/series` is `all`
-  unless the *feature* is platform-bound, as `0004`'s is. `0007` is the counterexample worth reading
-  next to it: also a source patch, but NVENC is built for all four targets, so it declares `all`.
-  The file a patch touches does not decide this — the feature does.
+  `linux`; one to `msys2/PKGBUILD` is `windows`; a source patch — one that adds to the
+  `debian/patches/` series — is `all` unless the *feature* is platform-bound, as `0004`'s is.
+  `0007` is the counterexample worth reading next to it: also a source patch, but NVENC is built for
+  all four targets, so it declares `all`. The file a patch touches does not decide this — the
+  feature does.
 
   ⚠ `0001.checks` argues against `all` in strong terms, and that argument is about `0001`/`0002`
   being two patches pinning two independent *build systems*, where one declaration each keeps them
@@ -127,20 +138,25 @@ patch therefore cannot orphan its doc — the same reason `checks/` keys on the 
 
 ## Retiring a patch
 
-The mirror of adding one: delete the patch **and both its artifacts** —
-`patches/jellyfin-ffmpeg/checks/NNNN.checks` and `docs/patches/NNNN-*.md`.
+The mirror of adding one: delete the patch **and all three of its artifacts** —
+`patches/jellyfin-ffmpeg/checks/NNNN.checks`, `docs/patches/NNNN-*.md`, and its row in
+`release-notes.sh` — then its row in the README's patch table.
 
-The pairing gate fails on either one left behind, reporting it as an `orphan`. That is loud rather
-than silent, which is the point — but it is two more files than people expect, and the gate is the
-only thing that will remind you.
+The pairing gate fails on a checks file or doc left behind, reporting it as an `orphan`, and
+`release-notes.sh --self-test` fails on a row whose doc is gone. That is loud rather than silent,
+which is the point — but it is more files than people expect, and the self-tests are the only thing
+that will remind you.
 
 Each patch doc carries its own retire condition in its header table.
 
 ## Scoring: the one thing this gate cannot do
 
-`0008` and `0009` are `ungateable` because a VMAF filter's *correctness* cannot be observed through
-`-h encoder=` or `-filters` — the only way to tell a right score from a wrong one is to compute one,
-and `libvmaf_cuda` needs a CUDA device no GitHub-hosted runner has. `--score` is what stands in:
+`0008`'s two `filter` checks prove `libvmaf_cuda` is *present*; `0009` is `ungateable`. Neither
+says anything about whether a score is *right*, and neither can: a VMAF filter's correctness cannot
+be observed through `-h encoder=` or `-filters` — the only way to tell a right score from a wrong
+one is to compute one, and `libvmaf_cuda` needs a CUDA device no GitHub-hosted runner has. That
+covers `0009`'s widened formats and the libvmaf motion fix `0008` carries. `--score` is what stands
+in:
 
 ```bash
 .github/scripts/verify-binary.sh --score /path/to/ffmpeg        # tolerance 0.01
@@ -194,7 +210,7 @@ Or directly:
 ```bash
 ./ffmpeg -h encoder=hevc_nvenc | grep -E 'uhq|tf_level|lookahead_level|split_encode'
 ./ffmpeg -h encoder=hevc_vaapi | grep -E 'dolbyvision|dv_l5'   # linux builds only
-./ffmpeg -filters | grep tonemap_cuda
+./ffmpeg -filters | grep -E 'tonemap_cuda|libvmaf'             # libvmaf_cuda: linux64 only
 ```
 
 This matters for the arm64 assets in particular: an x86-64 machine cannot execute either of them,

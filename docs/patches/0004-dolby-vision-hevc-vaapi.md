@@ -227,8 +227,8 @@ playback and nothing about the RPU. One playback on a DV display settles it.
 - **The MEL branch preserves a mapping only in principle.** All three MEL sources screened already
   carry the identity mapping, so "reset" and "leave alone" emit identical bytes on them. The branch
   is proven to *detect* correctly — the log names the EL type — but not to *preserve* a non-identity
-  MEL mapping, because no such source was found. Three of forty-three is too small to conclude MEL
-  mappings are always identity.
+  MEL mapping, because no such source was found. Three of the library's thirty-three MEL titles is
+  too small a sample to conclude MEL mappings are always identity.
 - `avctx->framerate` drives the DV level calculation, as in libx265 — an unset framerate gives a
   level derived from 0 fps. Pass `-r` if it matters.
 

@@ -70,6 +70,11 @@ jobs:
       - name: Verification manifest self-test
         run: ./.github/scripts/verify-binary.sh --self-test
 
+      # Same reasoning: whether every patch doc is linked from the release notes is a property of
+      # the repo, so it fails here rather than after a 2.5h build. checks.yaml runs it too.
+      - name: Release notes self-test
+        run: ./.github/scripts/release-notes.sh --self-test
+
       # Normalise once, so every downstream `if:` compares the same way whether the trigger was
       # schedule (inputs absent) or workflow_dispatch.
       - name: Resolve run mode
@@ -99,7 +104,7 @@ jobs:
   #
   # Deliberately still excluded: the 12 .deb packages, which are a third build system with its
   # own unpatched header pin, and the 2 mac targets, where 50-ffnvcodec.sh:7 disables ffnvcodec
-  # outright so a build from here would be identical to upstream's.
+  # outright, VAAPI and libvmaf are not built, and only 0005 would change anything.
   # ---------------------------------------------------------------------------------------
 
   build_linux:
@@ -139,7 +144,7 @@ jobs:
       #
       # The want/got check is load-bearing: without it a source patch that failed to create its
       # file would make this a silent no-op and the build would succeed WITHOUT the patch. The
-      # gate would catch that for 0004, but not for 0003, which is declared ungateable.
+      # gate would catch that for 0004, but not for an ungateable one such as 0003.
       - name: Apply patch series
         run: |
           set -euo pipefail
@@ -238,7 +243,7 @@ jobs:
       #
       # The want/got check is load-bearing: without it a source patch that failed to create its
       # file would make this a silent no-op and the build would succeed WITHOUT the patch. The
-      # gate would catch that for 0004, but not for 0003, which is declared ungateable.
+      # gate would catch that for 0004, but not for an ungateable one such as 0003.
       - name: Apply patch series
         run: |
           set -euo pipefail
@@ -324,7 +329,7 @@ jobs:
       #
       # The want/got check is load-bearing: without it a source patch that failed to create its
       # file would make this a silent no-op and the build would succeed WITHOUT the patch. The
-      # gate would catch that for 0004, but not for 0003, which is declared ungateable.
+      # gate would catch that for 0004, but not for an ungateable one such as 0003.
       - name: Apply patch series
         run: |
           set -euo pipefail
@@ -424,7 +429,7 @@ jobs:
       #
       # The want/got check is load-bearing: without it a source patch that failed to create its
       # file would make this a silent no-op and the build would succeed WITHOUT the patch. The
-      # gate would catch that for 0004, but not for 0003, which is declared ungateable.
+      # gate would catch that for 0004, but not for an ungateable one such as 0003.
       - name: Apply patch series
         run: |
           set -euo pipefail
@@ -538,6 +543,14 @@ jobs:
                 && needs.verify_linux_arm64.result == 'success' ) )
     runs-on: ubuntu-latest
     steps:
+      # Only for release-notes.sh. Same commit the build jobs patched from, so the notes describe
+      # the patch set that was actually applied.
+      - name: Checkout this recipe
+        uses: actions/checkout@v7
+        with:
+          path: .fork
+          fetch-depth: 1
+
       - name: Download built artifacts
         if: needs.resolve.outputs.mode != 'dry_run'
         uses: actions/download-artifact@v8
@@ -603,61 +616,20 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
-          # No checkout in this job, so gh has no git remote to infer the repo from.
+          # The recipe is checked out under .fork, not at the workspace root, so gh still has no
+          # git remote to infer the repo from.
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.resolve.outputs.release_tag }}
           UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
           MODE: ${{ needs.resolve.outputs.mode }}
         run: |
           set -euo pipefail
-          {
-            if [ "$MODE" != "full" ]; then
-              echo "**${MODE} run — these assets are empty stubs. Delete this release and its tag.**"
-              echo
-            fi
-            echo "Upstream \`${UPSTREAM_TAG}\` built with nv-codec-headers bumped to \`${PIN_NAME}\`,"
-            echo "unlocking \`-tune uhq\`, \`-tf_level\`, \`-lookahead_level\` and \`-split_encode_mode\`."
-            echo
-            echo "Also carries **VMAF**. The \`libvmaf\` filter is on linux64, win64 and winarm64;"
-            echo "the CUDA-accelerated \`libvmaf_cuda\` is **linux64 only**. linuxarm64 has neither."
-            echo
-            echo "Driver floors — check yours before installing:"
-            echo
-            echo "| | floor |"
-            echo "|---|---|"
-            echo "| NVENC and everything else here | **570.0** |"
-            echo "| \`libvmaf_cuda\` (linux64) | **580**, and a **Turing or newer** GPU |"
-            echo
-            echo "\`libvmaf_cuda\` takes CUDA frames only. 8, 10, 12 and 16 bit are all accepted, so"
-            echo "10-bit HDR and Dolby Vision go in natively:"
-            echo '```'
-            echo "ffmpeg -init_hw_device cuda=cu -filter_hw_device cu -i dis.mkv -i ref.mkv \\"
-            echo "  -lavfi \"[0:v]format=yuv420p10le,hwupload_cuda[d]; \\"
-            echo "          [1:v]format=yuv420p10le,hwupload_cuda[r]; \\"
-            echo "          [d][r]libvmaf_cuda=log_fmt=json:log_path=out.json\" -f null -"
-            echo '```'
-            echo
-            echo "From a CUDA decode the format is \`p010le\` — convert with"
-            echo "\`scale_cuda=format=yuv420p10\` first. **Never feed \`p010\` straight in:** its luma is"
-            echo "MSB-aligned, so it is read 64x too bright and scores wrong without erroring. Likewise"
-            echo "\`scale_cuda=format=yuv420p\` on 10-bit input silently measures the 8-bit projection."
-            echo
-            echo "Scores match the CPU \`libvmaf\` filter to ~0.0001 VMAF at both 8 and 10 bit."
-            echo
-            echo "Built by checking out \`${UPSTREAM}\` at \`${UPSTREAM_TAG}\` and applying"
-            echo "\`patches/jellyfin-ffmpeg/\`. Reproduce with:"
-            echo '```'
-            echo "git clone -b ${UPSTREAM_TAG} https://github.com/${UPSTREAM}.git && cd jellyfin-ffmpeg"
-            echo "git apply /path/to/patches/jellyfin-ffmpeg/*.patch"
-            echo "./build-linux-amd64 ./dist    # linux64    (needs docker)"
-            echo "./build-linux-arm64 ./dist    # linuxarm64 (needs docker; cross-compiled on x86-64)"
-            echo "./msys2/build.sh              # win64      (needs msys2 CLANG64)"
-            echo "./msys2/buildarm64.sh         # winarm64   (needs msys2 CLANGARM64 on arm64 windows)"
-            echo '```'
-            echo
-            echo "Assets carry \`-nvenc-${PIN_NAME}\` in the filename to distinguish them from"
-            echo "upstream's identically-versioned builds."
-          } > notes.md
+          # What the notes say lives in release-notes.sh, not here; its --self-test (resolve job,
+          # checks.yaml) fails if any patch doc is not linked from them. They name the recipe
+          # commit that was built, which matters on the in-place path below: `gh release edit`
+          # does not move the tag, so the tag can point at an older recipe commit than the assets.
+          .fork/.github/scripts/release-notes.sh > notes.md
+          TITLE="${UPSTREAM_TAG} (patched)"
 
           # `gh release create` defaults --latest to "automatic based on date and version", so a
           # smoke/dry_run release created after a real one could become Latest — and anything
@@ -675,7 +647,7 @@ jobs:
             if [ "$MODE" = "full" ]; then
               echo "Release $TAG exists — updating in place, not recreating."
               gh release edit "$TAG" "${LATEST[@]}" \
-                --title "${UPSTREAM_TAG} (nv-codec-headers ${PIN_NAME})" \
+                --title "$TITLE" \
                 --notes-file notes.md
               # --clobber replaces assets of the same name; the release is never absent.
               gh release upload "$TAG" dist/* --clobber
@@ -689,7 +661,7 @@ jobs:
           gh release create "$TAG" \
             "${LATEST[@]}" \
             --target "${{ github.sha }}" \
-            --title "${UPSTREAM_TAG} (nv-codec-headers ${PIN_NAME})" \
+            --title "$TITLE" \
             --notes-file notes.md \
             dist/*
           echo "Published $TAG with $(find dist -type f | wc -l) assets"

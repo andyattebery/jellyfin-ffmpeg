@@ -6,28 +6,27 @@ details that would otherwise bury it.
 ## Patches
 
 One doc per patch. **These are canonical** — the patch files carry a short mechanism summary and
-point here, and the repo README carries only an index. If a patch's behaviour and its doc disagree,
-the doc is the thing to fix.
+point here, and [the README's patch table](../README.md#the-patches) is an index to them, with each
+patch's kind, targets, gate and dependencies. If a patch's behaviour and its doc disagree, the doc
+is the thing to fix.
 
-| | covers | status |
-|---|---|---|
-| [0001 — nv-codec-headers pin, linux](patches/0001-nv-codec-headers-linux.md) | `linux64`, `linuxarm64` | shipping, gated |
-| [0002 — nv-codec-headers pin, windows](patches/0002-nv-codec-headers-windows.md) | `win64`, `winarm64` | shipping, gated |
-| [0003 — VAAPI import of alpha 10-bit RGB DRM formats](patches/0003-vaapi-alpha-10bit-rgb.md) | all targets | shipping, verified on hardware; not gateable |
-| [0004 — Dolby Vision RPU passthrough for hevc_vaapi](patches/0004-dolby-vision-hevc-vaapi.md) | all targets, linux-only feature | shipping, verified on hardware |
-| [0005 — options on a derived hardware device](patches/0005-allow-options-on-derived-hw-devices.md) | all targets | shipping, verified on hardware; not gateable |
-| [0006 — stop the msys2 packages building doxygen docs](patches/0006-disable-msys2-doxygen-doc-builds.md) | `win64`, `winarm64` | shipping, works around a toolchain crash; not gateable |
-| [0007 — Dolby Vision RPU passthrough for hevc_nvenc](patches/0007-dolby-vision-hevc-nvenc.md) | all targets | shipping, verified on hardware; **requires 0004** |
-| [0008 — CUDA-accelerated VMAF (`libvmaf_cuda`)](patches/0008-cuda-libvmaf.md) | `linux64` only | shipping, gated; scored against the CPU filter on hardware |
-| [0009 — `libvmaf_cuda` accepts 10-, 12- and 16-bit](patches/0009-libvmaf-cuda-10bit.md) | `linux64` only | shipping, ungateable; **requires 0008** |
-| [0010 — `libvmaf` on the Windows builds](patches/0010-libvmaf-windows.md) | `win64`, `winarm64` | shipping, gated; CPU-only, the Windows counterpart to 0008 |
+- [0001 — nv-codec-headers pin, linux build system](patches/0001-nv-codec-headers-linux.md)
+- [0002 — nv-codec-headers pin, msys2 (windows) build system](patches/0002-nv-codec-headers-windows.md)
+- [0003 — VAAPI import of the alpha 10-bit RGB DRM formats](patches/0003-vaapi-alpha-10bit-rgb.md)
+- [0004 — Dolby Vision RPU passthrough for hevc_vaapi](patches/0004-dolby-vision-hevc-vaapi.md)
+- [0005 — options on a derived hardware device](patches/0005-allow-options-on-derived-hw-devices.md)
+- [0006 — stop the msys2 packages building doxygen documentation](patches/0006-disable-msys2-doxygen-doc-builds.md)
+- [0007 — Dolby Vision RPU passthrough for hevc_nvenc](patches/0007-dolby-vision-hevc-nvenc.md)
+- [0008 — CUDA-accelerated VMAF (`libvmaf_cuda`), linux64](patches/0008-cuda-libvmaf.md)
+- [0009 — `libvmaf_cuda` accepts 10-, 12- and 16-bit input](patches/0009-libvmaf-cuda-10bit.md)
+- [0010 — `libvmaf` on the Windows builds](patches/0010-libvmaf-windows.md)
 
-Adding a patch means adding a doc here and a `checks/NNNN.checks` declaration. Both are enforced by
-the gate — see below.
+Every doc opens with the same header table: **Status**, **Covers**, **Depends on** (where there is
+a dependency), **Retires when**, **Gate**, then anything specific to that patch.
 
-The patches are independent apart from one pair: `0007` moves `0004`'s Dolby Vision profile 8.1
-conversion into a shared `libavcodec/dovi_p81.{c,h}`, so it must apply after `0004`. `0004` itself is
-unchanged and still applies alone.
+Adding a patch means adding a doc here, a `checks/NNNN.checks` declaration and a row in
+`.github/scripts/release-notes.sh`. All three are enforced — see
+[Adding a patch](verification-gate.md#adding-a-patch).
 
 ## Topics
 
@@ -44,4 +43,4 @@ unchanged and still applies alone.
 Everything in `docs/` is **published** — this repo is public. Hostnames, image tags, fleet paths
 and machine names do not belong here; hardware and driver versions do, where they are evidence for
 a measurement. Working notes that need real detail live in `tasks/`, `plans/` and `handoffs/`,
-which are gitignored.
+which are gitignored — so a published doc cannot cite them either.

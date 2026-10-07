@@ -4,8 +4,9 @@
 # would sit on main until the next upstream release.
 #
 # It deliberately does NOT build anything. Its whole job is to answer two questions:
-#   - is every patch in patches/jellyfin-ffmpeg/ declared in checks/, and vice versa?
-#   - do both scripts still behave the way their own assertions say they do?
+#   - does every patch in patches/jellyfin-ffmpeg/ have its checks/ declaration and its
+#     docs/patches/ doc, and is that doc linked from the release notes?
+#   - do the scripts still behave the way their own assertions say they do?
 name: checks
 
 on:
@@ -35,6 +36,11 @@ jobs:
 
       - name: resolve-upstream self-test
         run: ./.github/scripts/resolve-upstream.sh --self-test
+
+      # Fails when a patch doc is not linked from the release notes, so a new patch cannot reach a
+      # release that never mentions it.
+      - name: release-notes self-test
+        run: ./.github/scripts/release-notes.sh --self-test
 
       # bash 3.2 is what macOS ships, and docs/verification-gate.md tells people to hand-run this
       # script there. The runners have bash 5, so a bashism would pass here and fail on a

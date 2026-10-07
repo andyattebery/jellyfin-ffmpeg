@@ -29,7 +29,7 @@ build:
 | base image | must carry **the Mesa/libva under test** — that is the point of the loop | any sane distro base; the driver is **not** in the image |
 | how the GPU gets in | `--device /dev/dri` | CDI: `--device nvidia.com/gpu=all` (docker) |
 | extra build deps | Vulkan headers + libplacebo from source (the two expensive steps below) | **nv-codec-headers only** — skip both |
-| configure | `--enable-vaapi --enable-vulkan --enable-libplacebo --enable-libdrm` | `--enable-ffnvcodec --enable-cuda --enable-nvenc --enable-nvdec --enable-cuvid`, **plus `--enable-vaapi --enable-libdrm`** so `hevc_vaapi` still compiles |
+| configure | `--enable-vaapi --enable-vulkan --enable-libplacebo --enable-libdrm` | `--enable-ffnvcodec --enable-cuda --enable-cuda-llvm --enable-nvenc --enable-nvdec --enable-cuvid`, **plus `--enable-vaapi --enable-libdrm`** so `hevc_vaapi` still compiles |
 
 ⚠ **"Build and run in the same image" means something different on each.** On VAAPI the driver under
 test *is* the base image, which is the whole reason for the rule. On NVIDIA the driver libraries are
@@ -47,7 +47,7 @@ Set these once:
 BASE_IMAGE=...            # VAAPI: the image whose Mesa/libva you are testing.
                           # NVENC: any current distro base -- the driver comes from the host.
 SCRATCH=/path/with/space  # ~10 GB; source tree, build output
-UPSTREAM_TAG=v8.1.2-3     # the tag CI builds; see .github/scripts/resolve-upstream.sh --plan
+UPSTREAM_TAG=v8.1.3-1     # the tag CI builds; see .github/scripts/resolve-upstream.sh --plan
 ```
 
 **On the VAAPI track, pick `BASE_IMAGE` deliberately.** A stock distro image is the wrong choice if
@@ -81,7 +81,7 @@ ln -s debian/patches patches      # quilt looks for patches/ at the tree root, a
 Then push the ffmpeg patch series itself (inside the container, step 3):
 
 ```bash
-quilt push -a || true  # 102 at v8.1.2-3: upstream's 98 plus this repo's 4
+quilt push -a || true  # upstream's series, then this repo's 09xx source patches at the end
 ```
 
 The series is not optional. Several things this fork relies on live there — `vf_libplacebo`
@@ -131,7 +131,7 @@ ENTRYPOINT ["/bin/bash"]
 Much smaller: no Vulkan headers, no libplacebo, because `vf_libplacebo` is not on the path being
 debugged. What it does need is **nv-codec-headers at the tag CI pins** — read the commit out of
 `builder/scripts.d/50-ffnvcodec.sh` rather than hardcoding it a second time, exactly as with the
-Vulkan headers below. That file's header also records the **minimum driver version** the pin
+Vulkan headers above. That file's header also records the **minimum driver version** the pin
 requires; check the host against it before building, because the failure otherwise arrives as a
 runtime encoder error rather than a version complaint.
 
@@ -200,10 +200,10 @@ podman run --rm -v "$SCRATCH:/work:z" build-image -c '
 '
 ```
 
-For the **NVENC track**, swap the four hardware flags:
+For the **NVENC track**, replace the hardware flags with:
 
 ```
-  --enable-ffnvcodec --enable-cuda --enable-nvenc --enable-nvdec --enable-cuvid \
+  --enable-ffnvcodec --enable-cuda --enable-cuda-llvm --enable-nvenc --enable-nvdec --enable-cuvid \
   --enable-vaapi --enable-libdrm          # keep, so hevc_vaapi still compiles
 ```
 

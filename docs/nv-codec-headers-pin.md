@@ -62,5 +62,7 @@ blind spot that shipped the broken win64 asset. A lint catches the inverse mista
 declaring the identical `(kind, platform, args)` tuple, which is what copying `0001` to `0002` and
 forgetting to change `linux` to `windows` produces.
 
-`0003` and `0004` are unaffected by any of this: they live in the ffmpeg patch series that every
-build system applies, so they declare once.
+The source patches are unaffected by any of this: they live in the ffmpeg patch series that every
+build system applies, so each declares once — `all`, or narrower when its feature is
+platform-bound. `0007` is the one most likely to be confused with this case, because its checks are
+on `hevc_nvenc` too; see its doc.

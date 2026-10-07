@@ -58,8 +58,9 @@
 # 0009 widens the pixel formats libvmaf_cuda accepts, and 0008's 55-libvmaf.sh carries a libvmaf
 # motion-kernel fix. Neither is observable through `-h encoder=` or `-filters` -- the only way to
 # tell a correct VMAF from a wrong one is to compute one, and libvmaf_cuda needs a real CUDA device
-# that no GitHub-hosted runner has. So both are declared `ungateable`, and this mode is what stands
-# in: run it by hand on a GPU host after any libvmaf bump.
+# that no GitHub-hosted runner has. So 0009 is declared `ungateable`, 0008's two checks stop at
+# proving the filter is present, and this mode is what stands in: run it by hand on a GPU host after
+# any libvmaf bump.
 #
 # It asserts CUDA against the binary's OWN CPU libvmaf filter, not against a golden number. That is
 # deliberate -- a hardcoded score would rot the moment the model, the content or libvmaf changed,
@@ -146,7 +147,7 @@ has_filter() { printf '%s\n' "$2" | grep -qE "^[[:space:]]*[.A-Z]+[[:space:]]+${
 parse_vmaf_score() { printf '%s\n' "$1" | grep -oE 'VMAF score: [0-9.]+' | tail -1 | sed 's/^VMAF score: //'; }
 
 # |a - b| <= tol, via awk because bash has no float arithmetic and `bc` is not always installed --
-# it is absent from the sweepbox container, for one. Returns 1 on any non-numeric input rather than
+# minimal containers often lack it. Returns 1 on any non-numeric input rather than
 # treating it as zero, so a missing score cannot pass.
 within_tolerance() {
   case "$1$2$3" in *[!0-9.]*|'') return 1 ;; esac

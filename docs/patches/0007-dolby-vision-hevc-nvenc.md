@@ -141,7 +141,8 @@ VAAPI side "passed" while producing `{I: 1, P: 29}` — it tested nothing. Any r
   options. ⚠ `0001.checks` says *"Do NOT collapse the two files into one `all`"* — that is about
   `0001`/`0002` being two patches pinning two independent build systems, and does **not** transfer to
   a single patch in `libavcodec`. The precedent that fits is `filter  all  tonemap_cuda`.
-- **This patch depends on `0004`** and must apply after it. `0004` no longer stands alone in the way
-  its own doc describes — see the note there.
+- **This patch depends on `0004`** and must apply after it. The dependency is one way: `0004` is
+  unchanged by this patch and still applies, and behaves, exactly as its own doc describes. Retiring
+  `0004` means retiring or reworking this patch first.
 - **`git apply --check` is not a meaningful test** of this patch series. Only a real cumulative apply
   is; CI does one, and it was run here from a clean tree before the hardware testing.
