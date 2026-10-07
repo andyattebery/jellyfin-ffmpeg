@@ -67,7 +67,7 @@ doc_links() {
   printf '%s\n' "$out"
 }
 
-mark() { [ "$1" = y ] && printf '✓' || true; }
+mark() { if [ "$1" = y ]; then printf '✓'; fi; }
 
 # One paragraph or bullet per output line. GitHub renders a newline inside a release body as a
 # hard line break, so wrapping the output the way this source is wrapped breaks sentences on screen.
