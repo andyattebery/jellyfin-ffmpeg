@@ -45,7 +45,7 @@ under the `-jellyfin-` package naming every other dependency here uses.
 Nine PKGBUILDs already build with meson, so `makepkg -s` installs it from `makedepends` and the
 workflow's `setup-msys2` package list needed no change.
 
-## Three things in the PKGBUILD that look arbitrary and are not
+## Four things in the PKGBUILD that look arbitrary and are not
 
 1. **Tier `40`, not `55`.** `55-mingw-w64-libvmaf` was the first guess, mirroring Linux's
    `55-libvmaf.sh`, and it is wrong here. `msys2/build.sh` runs the PKGBUILD directories in
@@ -77,6 +77,32 @@ workflow's `setup-msys2` package list needed no change.
 
    No `-ldl` here. That was a glibc-2.28 artefact of the Linux crosstool-ng sysroot, not a libvmaf
    requirement.
+
+4. **`prepare()` renames libsvm's `swap`, `min` and `max` in `src/svm.cpp`**, with the same three
+   `sed`s [0008](0008-cuda-libvmaf.md)'s `55-libvmaf.sh` runs on Linux, so both platforms compile
+   the same `svm.cpp`.
+
+   Without the rename the build fails since LLVM 23. libc++ 23's `__split_buffer` swaps with
+   `using std::swap; swap(...)`, so argument-dependent lookup on `svm_node*` also finds `svm.cpp`'s
+   global `template <class T> static inline void swap(T&, T&)`, and the call is ambiguous:
+
+   ```
+   __split_buffer:195:5: error: call to 'swap' is ambiguous
+   ```
+
+   MSYS2's clang64 and clangarm64 went from LLVM 22.1.8 (the last green build, 2026-09-28) to
+   23.1.5, and from the next build on, 2026-11-04, every Windows job that reached libvmaf failed
+   this way. Linux is unaffected: it builds with gcc and libstdc++, and carried the rename
+   already. Reproduced locally against the libc++ 23.1.5 headers — the unmodified file fails with
+   exactly those three errors, the renamed one compiles.
+
+   The fix belongs upstream and is not there yet. LLVM closed
+   [llvm/llvm-project#230921](https://github.com/llvm/llvm-project/issues/230921) without a
+   libc++ change, and the vmaf side — [Netflix/vmaf#1700](https://github.com/Netflix/vmaf/pull/1700)
+   and [#1617](https://github.com/Netflix/vmaf/pull/1617), both replacing the templates with
+   `std::` — is unmerged. When a vmaf bump takes either, the rename has nothing to rename: the
+   `grep` after the `sed`s fails `prepare()` with a message, in seconds, instead of leaving the
+   compile to fail an hour into the job.
 
 ## Gate
 

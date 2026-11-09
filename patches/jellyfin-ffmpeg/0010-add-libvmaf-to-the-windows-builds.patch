@@ -1,9 +1,9 @@
 diff --git a/msys2/PKGBUILD/40-mingw-w64-libvmaf/PKGBUILD b/msys2/PKGBUILD/40-mingw-w64-libvmaf/PKGBUILD
 new file mode 100644
-index 0000000..e1b59f3
+index 0000000..825718c
 --- /dev/null
 +++ b/msys2/PKGBUILD/40-mingw-w64-libvmaf/PKGBUILD
-@@ -0,0 +1,88 @@
+@@ -0,0 +1,111 @@
 +# Maintainer: Andy Attebery <nice.yard4881@fastmail.com>
 +
 +_realname=vmaf
@@ -31,6 +31,29 @@ index 0000000..e1b59f3
 +
 +export MINGW_TOOLCHAIN_PREFIX="${MINGW_PREFIX}"
 +export FF_MINGW_PREFIX="${MINGW_TOOLCHAIN_PREFIX}/ffbuild"
++
++prepare() {
++  cd "${srcdir}/${_realname}-${pkgver}"
++
++  # libsvm's global swap/min/max templates, renamed with the same three seds as
++  # builder/scripts.d/55-libvmaf.sh, so both platforms compile the same svm.cpp.
++  #
++  # Required since libc++ 23, not cosmetic: its __split_buffer swaps with `using std::swap;
++  # swap(...)`, and argument-dependent lookup on svm_node* also finds svm.cpp's global
++  # `template <class T> static inline void swap(T&, T&)` -- "call to 'swap' is ambiguous", which
++  # broke both Windows builds once MSYS2 moved to LLVM 23. llvm/llvm-project#230921 was closed with
++  # no libc++ change; the vmaf-side fix (Netflix/vmaf#1700, #1617) is unmerged.
++  sed -i -E 's/([^.>:_[:alnum:]])swap\(/\1libsvm_swap(/g' libvmaf/src/svm.cpp
++  sed -i -E 's/([^.>:_[:alnum:]])min\(/\1libsvm_min(/g' libvmaf/src/svm.cpp
++  sed -i -E 's/([^.>:_[:alnum:]])max\(/\1libsvm_max(/g' libvmaf/src/svm.cpp
++
++  # Fail here rather than an hour later in the compile if the renames stop matching -- for one,
++  # when a vmaf bump takes #1700, which replaces the template with `using std::swap;`.
++  grep -q 'static inline void libsvm_swap(T& x, T& y)' libvmaf/src/svm.cpp || {
++    echo "svm.cpp: libsvm's swap template was not renamed; re-check the seds against vmaf ${pkgver}"
++    return 1
++  }
++}
 +
 +build() {
 +  mkdir -p "${srcdir}/build-${MSYSTEM}" && cd "${srcdir}/build-${MSYSTEM}"
